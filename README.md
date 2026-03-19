@@ -17,6 +17,8 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 
 - [仓库规格说明](docs/spec.md)
 - [文档索引](docs/README.md)
+- [开发环境说明](docs/dev-setup.md)
+- [Go 前端说明](docs/go-frontend.md)
 
 ## Agent 约定
 

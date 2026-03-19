@@ -1,0 +1,6 @@
+FROM tinygo/tinygo:0.39.0
+
+RUN mkdir -p /workspace /workspace/tmp /workspace/artifacts/tinygo
+WORKDIR /workspace
+
+CMD ["bash"]

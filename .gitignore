@@ -1,0 +1,6 @@
+artifacts/bin/
+artifacts/tinygo/*.ll
+artifacts/tinygo/*.log
+tmp/etcd/
+tmp/tinygo-work/
+tmp/tinygo-out/
