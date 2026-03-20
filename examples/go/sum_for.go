@@ -1,0 +1,11 @@
+package main
+
+func sumTo(n int) int {
+	sum := 0
+	i := 0
+	for i < n {
+		sum = sum + i
+		i = i + 1
+	}
+	return sum
+}

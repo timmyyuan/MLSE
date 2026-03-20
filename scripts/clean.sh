@@ -4,13 +4,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
-rm -rf \
-  "$ROOT/artifacts/bin" \
-  "$ROOT/artifacts/tinygo"/* \
-  "$ROOT/tmp/etcd" \
-  "$ROOT/tmp/tinygo-work" \
-  "$ROOT/tmp/tinygo-out"
+rm -rf "$ROOT/artifacts" "$ROOT/tmp"
 
-mkdir -p "$ROOT/artifacts/tinygo" "$ROOT/tmp"
+mkdir -p "$ROOT/artifacts" "$ROOT/tmp"
 
 echo "cleaned MLSE transient artifacts"

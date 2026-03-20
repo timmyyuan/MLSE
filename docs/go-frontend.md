@@ -15,9 +15,14 @@
 - 单文件 Go 源码
 - package 级函数
 - 参数和返回值中的 `int`
+- 条件位置和参数位置中的 `bool`
 - 函数体中的：
-  - `:=` 定义单个局部变量
-  - `+ / - / * / /` 二元表达式
+  - `var` 零值初始化和 `:=` 定义单个局部变量
+  - 标识符赋值
+  - `+ / - / * / /` 和整数比较二元表达式
+  - `if / else`
+  - 基本 `for`
+  - 表达式 `switch` 的 `case/default`
   - `return`
   - 标识符 / 整数字面量
 
@@ -42,15 +47,15 @@ module {
 
 - **类型系统**：当前仅把 Go `int` 直接映射成 `i32`
 - **语义分析**：主要依赖 AST 结构，不做完整 `go/types` / SSA 分析
-- **控制流**：还没有 `if / for / switch`
-- **调用与包解析**：还没有函数调用、导入、跨文件 package
+- **控制流**：`if / for / switch` 目前只是打印成实验性 `mlse.*` 文本；真正能否继续 lower，取决于 `docs/goir-llvm-experiment.md` 里当前验证过的子集
+- **调用与包解析**：只保留最小 `mlse.call` 占位文本，还没有导入解析、跨文件 package 和稳定调用约束
 - **真实 MLIR 集成**：当前只是输出清晰的 MLIR-like 文本，没有链接 MLIR C++/Go 绑定
 
 ## 未来扩展点
 
 1. 接 `go/types`，把名字解析和类型检查做实。
 2. 接 SSA，为后续结构化 lowering 和控制流打基础。
-3. 扩展到 `if / for / call / struct / slice`。
+3. 把现在的实验性 `if / for / switch` 文本收敛成明确 contract，再扩到 `call / struct / slice`。
 4. 把当前 emitter 抽成真正的 frontend IR + printer。
 5. 后续再把文本原型替换成真正的 MLIR builder 或稳定中间层。
 
