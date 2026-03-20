@@ -263,6 +263,7 @@ MLSE 的 canonical IR 应优先复用标准 MLIR dialect：
 
 阶段性策略：
 
+- 第零阶段：先在仓库里建立正式 `go` dialect 的 `TableGen + CMake + mlse-opt` 骨架，固定类型系统和目录边界。
 - 第一阶段：基于 `go/packages`、`go/types` 和 SSA 构建 typed frontend。
 - 第二阶段：将 SSA 结果映射到结构化 MLIR 与 runtime dialect。
 - 第三阶段：逐步扩展到接口、切片和部分标准库交互。
@@ -273,6 +274,21 @@ MLSE 的 canonical IR 应优先复用标准 MLIR dialect：
 - 基本类型、结构体、数组、切片
 - `if` / `for` / `switch`
 - 普通函数调用
+
+当前仓库已经落了这条路线的第一批正式骨架：
+
+- `include/mlse/Go/IR/`：`go` dialect TableGen 与头文件
+- `lib/Go/IR/`：dialect/type 注册实现
+- `tools/mlse-opt/`：最小 GoIR 解析驱动
+- `test/GoIR/`：正式 GoIR 方向的最小样本目录
+
+现阶段这条线已经覆盖：
+
+- `!go.*` 类型系统 bootstrap
+- 第一批最小必要 op：`go.string_constant`、`go.nil`、`go.make_slice`、`go.todo`、`go.todo_value`
+- `cmd/mlse-go` 默认输出正式 `go` dialect 的最小 parseable 子集
+
+实验性的 `cmd/mlse-go*` 路径仍继续保留用于回归和能力摸底，其中 `cmd/mlse-go -emit=goir-like` 继续为 `goir-llvm-exp` 提供旧文本输出。
 
 暂缓特性：
 

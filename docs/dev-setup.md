@@ -45,13 +45,20 @@ scripts/test.sh
 
 ```bash
 go run ./cmd/mlse-go ./examples/go/simple_add.go
+go run ./cmd/mlse-go -emit=goir-like ./examples/go/simple_add.go
 ```
 
 或者运行构建后的二进制：
 
 ```bash
 ./artifacts/bin/mlse-go ./examples/go/simple_add.go
+./artifacts/bin/mlse-go -emit=goir-like ./examples/go/simple_add.go
 ```
+
+当前约定是：
+
+- 默认 `-emit=formal`，输出正式 `go` dialect 的最小 parseable 子集
+- `-emit=goir-like`，输出旧的 GoIR-like 文本，供实验后端和批跑继续使用
 
 ## 目录约定
 
@@ -120,6 +127,14 @@ scripts/tinygo-probe-local.sh
 
 当前脚本会自动探测本地 `opt`、`llvm-as`、`mlir-opt`、`mlir-translate`、`clang`。
 
+需要注意，实验脚本现在会显式调用：
+
+```bash
+./artifacts/bin/mlse-go -emit=goir-like ...
+```
+
+因为 `cmd/mlse-go` 默认已经切到正式 `go` dialect 输出。
+
 验证优先级如下：
 
 1. `opt` verifier
@@ -136,7 +151,8 @@ scripts/tinygo-probe-local.sh
 
 当前仓库已经有：
 
-- 一个最小 `Go -> MLIR-like text` 原型
+- 一个最小 `Go -> formal go dialect` 桥接原型
+- 一个保留中的 `Go -> GoIR-like text` 兼容输出
 - 基础脚本入口
 - 最小 golden test 骨架
 
@@ -147,8 +163,14 @@ scripts/tinygo-probe-local.sh
 - Docker 化完整开发环境
 - 统一 CI 流程
 
-当前仓库新增了一条**实验性** `GoIR -> LLVM IR` 文本导出路径，但它只覆盖极小子集，不能视为正式后端能力。
+当前仓库新增了一条**实验性** `GoIR -> LLVM IR` 路径，但它只覆盖极小子集，不能视为正式后端能力。
 
-这条实验路径当前直接生成 LLVM IR 文本，而不是 LLVM dialect MLIR；因此 `mlir-opt` / `mlir-translate` 目前只在报告里体现可用性，不在主动验证链路上。
+这条实验路径当前已经改成：
+
+```text
+GoIR-like text -> LLVM dialect MLIR -> mlir-translate -> LLVM IR
+```
+
+因此 `mlir-opt` / `mlir-translate` 已经进入主动验证链路。
 
 后续一旦这些能力落地，需要同步更新本文件。

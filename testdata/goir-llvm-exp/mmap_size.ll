@@ -1,7 +1,10 @@
-; Experimental translation from MLSE GoIR-like text to LLVM IR.
-; This path only supports a tiny additive subset and is not canonical lowering.
+; ModuleID = 'LLVMDialectModule'
+source_filename = "LLVMDialectModule"
 
 define i32 @mmapSize() {
-entry:
   ret i32 0
 }
+
+!llvm.module.flags = !{!0}
+
+!0 = !{i32 2, !"Debug Info Version", i32 3}

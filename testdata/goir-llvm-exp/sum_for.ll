@@ -1,30 +1,36 @@
-; Experimental translation from MLSE GoIR-like text to LLVM IR.
-; This path only supports a tiny additive subset and is not canonical lowering.
+; ModuleID = 'LLVMDialectModule'
+source_filename = "LLVMDialectModule"
 
-define i32 @sumTo(i32 %n) {
-entry:
-  %slot0 = alloca i32
-  store i32 %n, ptr %slot0
-  %slot1 = alloca i32
-  %slot2 = alloca i32
-  store i32 0, ptr %slot1
-  store i32 0, ptr %slot2
-  br label %for.cond0
-for.cond0:
-  %load3 = load i32, ptr %slot2
-  %load4 = load i32, ptr %slot0
-  %ifcond5 = icmp slt i32 %load3, %load4
-  br i1 %ifcond5, label %for.body1, label %for.end2
-for.body1:
-  %load6 = load i32, ptr %slot1
-  %load7 = load i32, ptr %slot2
-  %tmp8 = add i32 %load6, %load7
-  store i32 %tmp8, ptr %slot1
-  %load9 = load i32, ptr %slot2
-  %tmp10 = add i32 %load9, 1
-  store i32 %tmp10, ptr %slot2
-  br label %for.cond0
-for.end2:
-  %load11 = load i32, ptr %slot1
-  ret i32 %load11
+define i32 @sumTo(i32 %0) {
+  %2 = alloca i32, align 4
+  store i32 %0, ptr %2, align 4
+  %3 = alloca i32, align 4
+  %4 = alloca i32, align 4
+  store i32 0, ptr %3, align 4
+  store i32 0, ptr %4, align 4
+  br label %5
+
+5:                                                ; preds = %9, %1
+  %6 = load i32, ptr %4, align 4
+  %7 = load i32, ptr %2, align 4
+  %8 = icmp slt i32 %6, %7
+  br i1 %8, label %9, label %15
+
+9:                                                ; preds = %5
+  %10 = load i32, ptr %3, align 4
+  %11 = load i32, ptr %4, align 4
+  %12 = add i32 %10, %11
+  store i32 %12, ptr %3, align 4
+  %13 = load i32, ptr %4, align 4
+  %14 = add i32 %13, 1
+  store i32 %14, ptr %4, align 4
+  br label %5
+
+15:                                               ; preds = %5
+  %16 = load i32, ptr %3, align 4
+  ret i32 %16
 }
+
+!llvm.module.flags = !{!0}
+
+!0 = !{i32 2, !"Debug Info Version", i32 3}

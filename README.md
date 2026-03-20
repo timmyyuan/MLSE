@@ -4,14 +4,14 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 
 项目目标是将 `C/C++/Python/Go` 程序转换为 `MLIR`，并支持将 `MLIR` 进一步 lowering 成 `LLVM IR`，形成统一的多语言编译与分析管线。
 
-目前仓库处于“规划已建立、最小原型开始落地”的阶段。除了技术规划文档，仓库中已经补上了一个极小 Go 前端原型，用于验证 `Go -> MLIR-like text` 的第一条链路。这份 README 的作用是说明项目目标、当前阶段和文档入口。
+目前仓库处于“规划已建立、最小原型开始落地”的阶段。除了技术规划文档，仓库中已经补上了一个极小 Go 前端原型，并开始把它桥接到正式 `go` dialect。这份 README 的作用是说明项目目标、当前阶段和文档入口。
 
 ## 当前状态
 
 - 状态：初始化中，已落下第一个可运行原型
-- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP
-- 文档：已补充技术规划版 spec、docs 索引和 Go 前端说明
-- 目标：先打通可验证的最小链路，再逐步替换为真实 frontend / MLIR 管线
+- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP（默认输出正式 `go` dialect，保留 `goir-like` 兼容模式）、`cmd/mlse-goir-llvm-exp` 实验性 GoIR 后端，以及第一批正式 `go` dialect C++/TableGen 骨架
+- 文档：已补充技术规划版 spec、docs 索引、Go 前端说明、正式 GoIR dialect bootstrap 说明和实验性 GoIR 后端说明
+- 目标：一边维持实验链路做覆盖回归，一边逐步收敛到真实 frontend / MLIR 管线
 
 ## 文档入口
 
@@ -19,6 +19,8 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 - [文档索引](docs/README.md)
 - [开发环境说明](docs/dev-setup.md)
 - [Go 前端说明](docs/go-frontend.md)
+- [GoIR 方言 bootstrap 说明](docs/goir-dialect.md)
+- [GoIR 到 LLVM 实验说明](docs/goir-llvm-experiment.md)
 
 ## Agent 约定
 
@@ -62,14 +64,16 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 - 读取单个 `.go` 文件
 - 解析 package 级函数
 - 支持 `int` 参数 / 返回值，以及条件/参数位置的 `bool`
-- 支持局部 `var` / `:=`、赋值、整数常量、标识符、`+ - * /`、整数比较、`return`
-- 可打印实验性 `if / else`、基本 `for`、表达式 `switch` 的 GoIR-like 文本
-- 输出简化的 MLIR-like module 文本
+- 支持局部 `var` / `:=`、赋值、整数常量、字符串常量、标识符、`+ - * /`、整数比较、直接调用、`make([]T, ...)`、`nil`、`return`
+- 已开始把简单 `if` 和标准计数循环 lower 到 `scf.if` / `scf.for`
+- 默认输出可被 `mlse-opt` 解析的正式 MLIR：以 `func/arith` 为主，必要时补 `go.string_constant`、`go.nil`、`go.make_slice`、`go.todo`、`go.todo_value`
+- 同时保留 `-emit=goir-like`，继续输出旧的 GoIR-like 文本给实验后端回归用
 
 运行示例：
 
 ```bash
 go run ./cmd/mlse-go ./examples/go/simple_add.go
+go run ./cmd/mlse-go -emit=goir-like ./examples/go/simple_add.go
 ```
 
 示例输出：
@@ -77,8 +81,8 @@ go run ./cmd/mlse-go ./examples/go/simple_add.go
 ```mlir
 module {
   func.func @add(%a: i32, %b: i32) -> i32 {
-    %c = arith.addi %a, %b : i32
-    return %c : i32
+    %bin1 = arith.addi %a, %b : i32
+    return %bin1 : i32
   }
 }
 ```
@@ -86,6 +90,47 @@ module {
 更多说明见：
 
 - [docs/go-frontend.md](docs/go-frontend.md)
+
+### 正式 GoIR bootstrap
+
+仓库现在已经新增第一批正式 MLIR 工程骨架：
+
+- `include/mlse/Go/IR/`：`go` dialect 的 TableGen 与头文件
+- `lib/Go/IR/`：dialect 注册与类型定义实现
+- `tools/mlse-opt/`：最小 MLIR 驱动，用于注册 `go` dialect 并解析样例
+- `test/GoIR/ir/`：正式 GoIR 方向的最小 IR 样本
+
+当前这条线已经落了第一批 `go` 类型和自定义 op：
+
+- 类型：`!go.string`、`!go.error`、`!go.named<...>`、`!go.ptr<T>`、`!go.slice<T>`
+- op：`go.string_constant`、`go.nil`、`go.make_slice`、`go.todo`、`go.todo_value`
+
+它还没有完整的 frontend / pass / lowering，但已经标志着仓库从“纯 Go 文本原型”进入“真实 MLIR dialect 工程面”；`cmd/mlse-go` 现在已经可以直接产出这套正式 dialect 的最小 parseable 子集。
+
+更多说明见：
+
+- [docs/goir-dialect.md](docs/goir-dialect.md)
+
+### `cmd/mlse-goir-llvm-exp`
+
+这是一个实验性的 GoIR-like 后端路径。
+
+当前默认链路是：
+
+```text
+GoIR-like text -> LLVM dialect MLIR -> LLVM IR
+```
+
+运行示例：
+
+```bash
+go run ./cmd/mlse-goir-llvm-exp ./testdata/simple_add.mlir
+go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect ./testdata/simple_add.mlir
+```
+
+更多说明见：
+
+- [docs/goir-llvm-experiment.md](docs/goir-llvm-experiment.md)
 
 ## 协作原则
 
@@ -100,7 +145,7 @@ module {
 ## 下一步建议
 
 - 建立 Docker 开发环境和统一脚本入口。
-- 先实现基于手写 MLIR 的 `LLVM IR` 输出链路。
+- 继续把当前实验性 GoIR 后端替换为真实的 canonical MLIR / pass 管线。
 - 为 `C/C++` 集成启用 `CIR` 的 Clang/ClangIR。
 - 定义统一的 frontend contract 和最小可支持语言子集。
 - 创建编译驱动、dialect、pass、测试、lint 和 clean 骨架。

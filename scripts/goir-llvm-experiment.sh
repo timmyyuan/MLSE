@@ -222,7 +222,7 @@ prepare_input() {
   local input="$4"
 
   if [[ "$mode" == "source" ]]; then
-    "$MLSE_GO_BIN" "$source" >"$input"
+    "$MLSE_GO_BIN" -emit=goir-like "$source" >"$input"
   else
     cp "$fixture" "$input"
   fi

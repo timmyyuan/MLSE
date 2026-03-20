@@ -2,67 +2,92 @@
 
 这份文档记录仓库内新增的**实验性** GoIR 到 LLVM IR 路径。
 
-它不是正式后端，也不代表仓库已经具备 `Go -> LLVM IR` 的稳定支持；当前目标只是把“哪些 GoIR 形态已经足够落到 LLVM IR、哪些还只是占位文本”固定成可复现实验。
+它不是正式后端，也不代表仓库已经具备 `Go -> LLVM IR` 的稳定支持；当前目标只是把“哪些 GoIR 形态已经足够落到 LLVM dialect MLIR / LLVM IR、哪些还只是占位文本”固定成可复现实验。
+
+截至 `2026-03-20`，仓库里已经另外新增了一条**正式 `go` dialect bootstrap** 路线，见 [goir-dialect.md](goir-dialect.md)。两条路径的关系是：
+
+- 正式 `go` dialect 路线：面向长期可维护的真实 MLIR 工程面
+- 当前实验路径：继续承担覆盖回归和 blocker 摸底
+
+## 当前链路
+
+截至 `2026-03-20`，当前实验后端的最小链路已经改成：
+
+```text
+GoIR-like text
+  -> LLVM dialect MLIR
+  -> mlir-translate --mlir-to-llvmir
+  -> LLVM IR
+```
+
+由于 `cmd/mlse-go` 默认已经切到正式 `go` dialect 输出，实验脚本和批跑现在会显式使用：
+
+```bash
+go run ./cmd/mlse-go -emit=goir-like <input.go>
+```
+
+CLI 默认仍输出 LLVM IR，但现在额外支持：
+
+```bash
+go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect <input.goir>
+```
 
 ## 新增内容
 
 - `cmd/mlse-goir-llvm-exp`：一个独立的、最小可用的 GoIR 子集翻译器
-- `scripts/goir-llvm-experiment.sh`：运行端到端实验，生成当次运行报告，并把成功样本持久化到仓库内
 - `testdata/goir-llvm-exp/`：从成功 GoIR 样本中提炼出来的稳定夹具
+- `testdata/goir-llvm-exp/*.llvm.mlir`：稳定的 LLVM dialect 中间层 golden
 - `testdata/goir-llvm-exp/successes/`：每个成功样本一个目录，保存成对的 GoIR 与 LLVM IR
 
 ## 设计边界
 
-当前实验路径只支持非常小的一组 GoIR 形态：
+当前实验路径已经从“只能吃一小撮手工夹具”扩到“能容忍一批 placeholder-rich GoIR 文本”，但它依然不是语义保真的正式后端。
 
-- 单返回值函数
+当前稳定覆盖的形态主要包括：
+
+- 单返回值函数，以及通过 LLVM struct 打包的多返回值函数 / `return`
 - `i1`、`i32`、`i64`
 - 其它大多数 `!go.*` 类型先按 opaque `ptr` 处理
-- 顶层局部变量初始化与重赋值，经由保守的 stack-slot lowering 处理
-- `return`
+- 局部变量初始化与重赋值，经由 stack-slot lowering 处理
 - `arith.addi` / `arith.subi` / `arith.muli` / `arith.divsi`
 - `arith.cmpi_*`
-- `mlse.if %cond : i1`
-- `mlse.if true/false : i1`
-- `mlse.if arith.cmpi_* ...`
-- 分支后通过**已预声明局部变量**完成的值合流
-- `mlse.for`，条件只接受 `i1` 或内联 `arith.cmpi_*`
+- `mlse.if` / `mlse.for` 的 `i1`、整数和 pointer-truthiness 条件
+- `mlse.for`
 - `mlse.switch`，tag 只接受 `i1/i32/i64`，`case` 只接受单个字面量值，可带 `default`
 - `mlse.call`
 - `mlse.nil`
+- 前端把简单 `range` 先降成 `len + index + mlse.for`
+- `break` / `continue`
+- `mlse.expr`
+- `mlse.store_select` / `mlse.store_index` / `mlse.store_deref`
+- `mlse.select` / `mlse.index` / `mlse.load` / `mlse.composite` / 字符串字面量的 **opaque fallback** lowering
+- 同名 external call 在不同签名下的 symbol 自动拆分
 
 明确不支持：
 
-- `mlse.if` / `mlse.for` 的其它条件表达式形态
-- 在 `if / for / switch` 控制流体内首次定义新局部变量
-- 需要真正 SSA phi-like join 的分支值合流
-- `mlse.range`
+- 对多返回值内部函数调用的真实返回值建模
+- 需要真实 SSA phi-like join 的值合流
 - `mlse.switch` 的 multi-case、fallthrough、非标量 tag 和其它更复杂形式
-- `mlse.select`、`mlse.composite`、`mlse.funclit`
-- 多返回值
-- `break` / `continue` / 其它显式 branch 占位语句
+- 依赖真实容器/对象布局的精确语义
+- 目前的 opaque fallback 只保证“能翻出 LLVM IR / verifier 尽量通过”，不保证语义等价
 
-这组限制是刻意保守的。它的用途是确认当前 GoIR 文本里已经有哪些片段能稳定导出 LLVM IR，而不是去掩盖大面积未定义语义。
+这里的“opaque fallback”是刻意加上的实验补丁：它把 `select/index/load/composite/string/store` 等高层形态先收敛成可验证的 LLVM dialect / LLVM IR 占位值或副作用占位，而不是假装已经完成了真实 lowering。
 
 ## Validation Strategy
 
-实验脚本现在会把验证拆成三层，并优先选择更强的 dedicated verifier：
+当前实验链路的验证分成五层：
 
-1. translation：`cmd/mlse-goir-llvm-exp` 是否成功把 GoIR 文本翻成 LLVM IR 文本
-2. verifier：优先用 `opt` verifier；如果没有 `opt`，再尝试 `llvm-as`
-3. compile：独立记录 `clang -c` 是否能够把生成的 LLVM IR 编译成目标文件
+1. lowering：`cmd/mlse-goir-llvm-exp -emit=llvm-dialect` 是否成功把 GoIR 文本降成 LLVM dialect MLIR
+2. MLIR parse：优先用 `mlir-opt` 检查中间层是否可被 MLIR 正常解析
+3. translation：`mlir-translate --mlir-to-llvmir` 是否成功把 LLVM dialect MLIR 翻成 LLVM IR
+4. verifier：优先用 `opt` verifier；如果没有 `opt`，再尝试 `llvm-as`
+5. compile：独立记录 `clang -c` 是否能够把生成的 LLVM IR 编译成目标文件
 
-这三层状态会分别进入 `report.json` / `report.md`，不再把“能翻译”和“能编译”折叠成同一个 success。
-
-关于 MLIR 工具：
-
-- 脚本会探测本地 `mlir-opt` / `mlir-translate`
-- 但当前实验路径直接产出 LLVM IR 文本，不经过 LLVM dialect MLIR
-- 因此 `mlir-*` 目前只进入工具可用性报告，不参与主动验证链路
+这些状态会分别进入 `report.json` / `report.md`，不再把“能翻译”和“能编译”折叠成同一个 success。
 
 ## 当前实验结论
 
-通过 `scripts/goir-llvm-experiment.sh`，当前仓库已经验证了下面几类样本：
+当前仓库已经验证了下面几类样本：
 
 - `examples/go/simple_add.go`
 - `examples/go/sign_if.go`
@@ -72,8 +97,28 @@
 - `examples/go/switch_value.go`
 - 成功 GoIR 样本里的 `mmapSize` 风格整数返回函数
 - 成功 GoIR 样本里的 `prealloc*` 风格 opaque-pointer / 外部调用函数
-- `ByteOrder` 风格的 `mlse.if` 控制流样本仍会被明确拒绝，因为条件仍然是 `mlse.select ... : !go.any`
-- `if` / `for` / `switch` 体内新建局部变量、以及 multi-case `switch`，也会被显式拒绝
+- `ByteOrder` 风格的宽松条件样本现在可通过 opaque fallback 翻译
+- `if` / `for` 体内新建局部变量现在可被 stack-slot lowering 接住
+- `multi-case switch` 仍会被显式拒绝
+
+`../gobench-eq/dataset/cases/goeq-spec-*` 的当次批跑结果已经固定到：
+
+- `artifacts/goeq-spec-batch/summary.tsv`
+- `artifacts/goeq-spec-batch/report.md`
+
+截至 `2026-03-20`，最近一次 **完整批跑** 的结果为：
+
+- frontend success: `78/78`
+- lowering success: `78/78`
+- MLIR parse success: `78/78`
+- translation success: `78/78`
+- verifier success: `78/78`
+- 双边都 verifier-success 的 case: `39/39`
+
+这次数字已经对应“先产 LLVM dialect MLIR，再走 `mlir-translate`”之后的最新完整批跑。`goeq-spec-*` 当前已经全量到达 LLVM IR / verifier-success。完整成功 case 名单固定在仓库产物：
+
+- `artifacts/goeq-spec-batch/report.md`
+- `artifacts/goeq-spec-batch/summary.tsv`
 
 当次运行的日志和汇总报告默认写到：
 
@@ -84,6 +129,7 @@
 成功样本的持久化落盘默认写到：
 
 - `testdata/goir-llvm-exp/successes/<sample>/goir.mlir`
+- `testdata/goir-llvm-exp/successes/<sample>/llvm-dialect.mlir`
 - `testdata/goir-llvm-exp/successes/<sample>/llvm.ll`
 - `testdata/goir-llvm-exp/successes/index.json`
 - `testdata/goir-llvm-exp/successes/index.md`
@@ -99,19 +145,31 @@
 - 当前样本是 translation success、verifier success 还是 compile success
 - dedicated verifier 覆盖率，以及多少样本只能退化到 compile-only 检查
 
+## 与正式 `go` dialect 的关系
+
+当前实验链路继续保留，原因是它仍然是最快的覆盖率摸底入口。
+
+但从架构上说，后续不应继续把这条路径无限扩成正式实现。更合理的分工是：
+
+- `cmd/mlse-go` / `cmd/mlse-goir-llvm-exp`：继续承担实验和批跑
+- `include/mlse/Go/IR`、`lib/Go/IR`、`tools/mlse-opt`：承接正式 `go` dialect 的长期实现
+
 ## 设计建议
 
-下一步不应该直接把更多 `mlse.*` 占位语句硬翻成 LLVM IR。
+这轮为了摸清 `gobench-eq` 的覆盖情况，已经临时引入了一部分 opaque fallback；当前完整 batch blocker 已经清零，但这些 fallback 仍然不等于语义保真。
+
+下一步不应该继续无约束地把更多 `mlse.*` 占位语句硬翻成 LLVM dialect / LLVM IR，而应该把这些 fallback 逐步收敛成明确 contract。
 
 更合理的顺序是：
 
 1. 先定义一个 verifier-backed 的 `GoIR-L0` 子集契约。
 2. 明确哪些 `cmd/mlse-go` 输出已经满足“标量 + 预声明局部 + 受限控制流”约束。
-3. 让 `GoIR-L0` 先稳定落到 LLVM IR 或 MLIR LLVM dialect。
-4. 在当前 `if/for/switch` 子集稳定后，再逐步把 `range`、`break/continue`、更通用的值合流和 `select` 等结构纳入契约。
+3. 让 `GoIR-L0` 先稳定落到 LLVM dialect，并复用标准 `mlir-translate` 导出 LLVM IR。
+4. 把目前为覆盖率加入的 `!go.any` / pointer-like fallback，逐步替换成 verifier-backed 的 typed contract。
+5. 在当前 `if/for/switch/range` 子集批跑稳定后，再把更真实的容器布局、值合流和更通用的调用/返回建模纳入契约。
 
 ## Obsidian 同步说明
 
 按仓库约定，这项实验后续应同步到 vault `next` 下的 `mlse设计/02-GoIR/`。
 
-本次会话已经定位到 vault `next`，但当前沙箱只允许写仓库工作区，不能直接修改 vault `next/mlse设计/02-GoIR/`。因此这里先把结论落在仓库文档中；后续需要在可写环境里把同样的支持边界补同步到 Obsidian。
+本次会话已经同步更新了 vault `next/mlse设计/02-GoIR/` 里的相关说明，避免设计文档继续停留在“仓库内尚无任何实验实现”的旧状态。
