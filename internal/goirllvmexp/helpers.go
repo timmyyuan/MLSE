@@ -2,7 +2,7 @@ package goirllvmexp
 
 import (
 	"fmt"
-	"strconv"
+	"math/big"
 	"strings"
 )
 
@@ -30,9 +30,9 @@ func splitTopLevel(input string) ([]string, error) {
 		switch r {
 		case '"':
 			inString = true
-		case '<', '(':
+		case '<', '(', '[':
 			depth++
-		case '>', ')':
+		case '>', ')', ']':
 			depth--
 			if depth < 0 {
 				return nil, fmt.Errorf("unbalanced delimiters in %q", input)
@@ -52,6 +52,53 @@ func splitTopLevel(input string) ([]string, error) {
 		out = append(out, last)
 	}
 	return out, nil
+}
+
+func splitTrailingType(input string) (string, string, error) {
+	depth := 0
+	inString := false
+	escaped := false
+	splitAt := -1
+	for i, r := range input {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '<', '(', '[':
+			depth++
+		case '>', ')', ']':
+			depth--
+			if depth < 0 {
+				return "", "", fmt.Errorf("unbalanced delimiters in %q", input)
+			}
+		case ':':
+			if depth == 0 && i > 0 && i+1 < len(input) && input[i-1] == ' ' && input[i+1] == ' ' {
+				splitAt = i - 1
+			}
+		}
+	}
+	if depth != 0 || splitAt < 0 {
+		return "", "", fmt.Errorf("missing trailing type in %q", input)
+	}
+	head := strings.TrimSpace(input[:splitAt])
+	ty := strings.TrimSpace(input[splitAt+3:])
+	if head == "" || ty == "" {
+		return "", "", fmt.Errorf("missing trailing type in %q", input)
+	}
+	return head, ty, nil
 }
 
 func mustLLVMType(goTy string) string {
@@ -144,11 +191,60 @@ func isIntegerLiteral(raw string) bool {
 	if raw == "" {
 		return false
 	}
-	if raw[0] == '-' {
-		raw = raw[1:]
+	_, ok := parseIntegerLiteral(raw)
+	return ok
+}
+
+func parseIntegerLiteral(raw string) (*big.Int, bool) {
+	if raw == "" {
+		return nil, false
 	}
-	_, err := strconv.ParseInt(raw, 10, 64)
-	return err == nil
+	v := new(big.Int)
+	parsed, ok := v.SetString(raw, 0)
+	if ok {
+		return parsed, true
+	}
+	return nil, false
+}
+
+func integerBitWidth(llvmTy string) (int, bool) {
+	switch llvmTy {
+	case "i1":
+		return 1, true
+	case "i8":
+		return 8, true
+	case "i16":
+		return 16, true
+	case "i32":
+		return 32, true
+	case "i64":
+		return 64, true
+	default:
+		return 0, false
+	}
+}
+
+func normalizeIntegerLiteral(raw string, llvmTy string) (string, error) {
+	v, ok := parseIntegerLiteral(raw)
+	if !ok {
+		return "", fmt.Errorf("invalid integer literal %q", raw)
+	}
+	width, ok := integerBitWidth(llvmTy)
+	if !ok {
+		return raw, nil
+	}
+	modulus := new(big.Int).Lsh(big.NewInt(1), uint(width))
+	wrapped := new(big.Int).Mod(v, modulus)
+	if wrapped.Sign() < 0 {
+		wrapped.Add(wrapped, modulus)
+	}
+	if width > 1 {
+		signBit := new(big.Int).Lsh(big.NewInt(1), uint(width-1))
+		if wrapped.Cmp(signBit) >= 0 {
+			wrapped.Sub(wrapped, modulus)
+		}
+	}
+	return wrapped.String(), nil
 }
 
 func (e *funcEmitter) emitTruthiness(value string, llvmTy string, line int) (string, error) {

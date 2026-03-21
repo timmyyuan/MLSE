@@ -110,7 +110,9 @@ func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (str
 	case emitter.resultTy == "void":
 		emitter.emitTerminator("llvm.return")
 	default:
-		return "", nil, fmt.Errorf("function %s falls off the end without returning %s", fn.name, emitter.resultTy)
+		if err := emitter.emitImplicitZeroReturn(); err != nil {
+			return "", nil, fmt.Errorf("function %s falls off the end without returning %s: %v", fn.name, emitter.resultTy, err)
+		}
 	}
 
 	var b strings.Builder
@@ -138,6 +140,9 @@ func (i *aliasInst) emit(e *funcEmitter) error {
 	value, llvmTy, err := e.resolveTyped(i.src, storeGoTy)
 	if err != nil {
 		return fmt.Errorf("line %d: %v", i.line, err)
+	}
+	if i.dest.name == "%_" {
+		return nil
 	}
 	return e.storeLocal(i.dest.name, storeGoTy, llvmTy, value)
 }
@@ -211,18 +216,33 @@ func (i *callInst) emit(e *funcEmitter) error {
 		argTys = append(argTys, llvmTy)
 	}
 
+	callee := i.callee
 	if fn, ok := e.signatures[i.callee]; ok {
-		if len(fn.params) != len(argTys) {
-			return fmt.Errorf("line %d: call to %s has %d args, expected %d", i.line, i.callee, len(argTys), len(fn.params))
+		matches := len(fn.params) == len(argTys) && len(fn.results) <= 1
+		if matches {
+			switch len(fn.results) {
+			case 0:
+				matches = retTy == "void"
+			case 1:
+				matches = mustLLVMType(fn.results[0]) == retTy
+			}
 		}
-		if len(fn.results) > 1 {
-			return fmt.Errorf("line %d: calls to multi-result internal functions are not supported", i.line)
+		if matches {
+			for idx, param := range fn.params {
+				if mustLLVMType(param.ty) != argTys[idx] {
+					matches = false
+					break
+				}
+			}
+		}
+		if !matches {
+			callee = e.resolveExternSymbol(i.callee, argTys, retTy)
 		}
 	} else {
-		i.callee = e.resolveExternSymbol(i.callee, argTys, retTy)
+		callee = e.resolveExternSymbol(i.callee, argTys, retTy)
 	}
 
-	callText := fmt.Sprintf("llvm.call @%s(%s) : (%s) -> %s", i.callee, strings.Join(argValues, ", "), strings.Join(argTys, ", "), llvmCallResultText(retTy))
+	callText := fmt.Sprintf("llvm.call @%s(%s) : (%s) -> %s", callee, strings.Join(argValues, ", "), strings.Join(argTys, ", "), llvmCallResultText(retTy))
 	if retTy == "void" {
 		e.emitInstruction(callText)
 		return nil
@@ -280,21 +300,67 @@ func (i *exprInst) emit(e *funcEmitter) error {
 	return err
 }
 
-func (i *branchInst) emit(e *funcEmitter) error {
-	if len(e.loopStack) == 0 {
-		return fmt.Errorf("line %d: %s used outside loop", i.line, i.kind)
+func (i *labelInst) emit(e *funcEmitter) error {
+	if e.hasCurrent && !e.terminated {
+		e.emitTerminator(fmt.Sprintf("llvm.br ^%s", i.label))
 	}
-	labels := e.loopStack[len(e.loopStack)-1]
+	e.startBlock(i.label)
+	return nil
+}
+
+func (i *branchInst) emit(e *funcEmitter) error {
 	switch i.kind {
 	case "continue":
+		if len(e.loopStack) == 0 {
+			return fmt.Errorf("line %d: %s used outside loop", i.line, i.kind)
+		}
+		labels := e.loopStack[len(e.loopStack)-1]
 		e.emitTerminator(fmt.Sprintf("llvm.br ^%s", labels.continueLabel))
 		return nil
 	case "break":
+		if len(e.loopStack) == 0 {
+			return fmt.Errorf("line %d: %s used outside loop", i.line, i.kind)
+		}
+		labels := e.loopStack[len(e.loopStack)-1]
 		e.emitTerminator(fmt.Sprintf("llvm.br ^%s", labels.breakLabel))
+		return nil
+	case "goto":
+		if i.label == "" {
+			return fmt.Errorf("line %d: goto without label", i.line)
+		}
+		e.emitTerminator(fmt.Sprintf("llvm.br ^%s", i.label))
 		return nil
 	default:
 		return fmt.Errorf("line %d: unsupported branch %q", i.line, i.kind)
 	}
+}
+
+func (i *incDecInst) emit(e *funcEmitter) error {
+	storeGoTy := i.target.ty
+	if storeGoTy == "" {
+		storeGoTy = e.typeOfValue(i.target.raw)
+	}
+
+	value, llvmTy, err := e.resolveTyped(i.target, storeGoTy)
+	if err != nil {
+		return fmt.Errorf("line %d: %v", i.line, err)
+	}
+
+	if !strings.HasPrefix(i.target.raw, "%") || !isIntegerLLVMType(llvmTy) {
+		return nil
+	}
+
+	one, err := e.materializeLiteral("1", llvmTy)
+	if err != nil {
+		return fmt.Errorf("line %d: %v", i.line, err)
+	}
+	tmp := e.freshValue("incdec")
+	op := "llvm.add"
+	if i.op == "mlse.--" {
+		op = "llvm.sub"
+	}
+	e.emitInstruction(fmt.Sprintf("%s = %s %s, %s : %s", tmp, op, value, one, llvmTy))
+	return e.storeLocal(i.target.raw, storeGoTy, llvmTy, tmp)
 }
 
 func (i *storeInst) emit(e *funcEmitter) error {
@@ -546,6 +612,13 @@ func (e *funcEmitter) storeLocal(name string, goTy string, llvmTy string, value 
 	if err != nil {
 		return err
 	}
+	if slot.llvmTy != llvmTy {
+		value, err = e.materializeZero(slot.llvmTy)
+		if err != nil {
+			return err
+		}
+		llvmTy = slot.llvmTy
+	}
 	align := alignmentForLLVMType(llvmTy)
 	e.emitInstruction(fmt.Sprintf("llvm.store %s, %s {alignment = %d : i64} : %s, !llvm.ptr", value, slot.ptr, align, llvmTy))
 	return nil
@@ -556,12 +629,6 @@ func (e *funcEmitter) ensureLocal(name string, goTy string, llvmTy string) (loca
 		return localSlot{}, fmt.Errorf("cannot materialize local %s with void type", name)
 	}
 	if slot, ok := e.locals[name]; ok {
-		if slot.llvmTy != llvmTy {
-			if goTy == "" || goTy == "!go.any" {
-				return slot, nil
-			}
-			return localSlot{}, fmt.Errorf("%s changes type from %s to %s", name, slot.llvmTy, llvmTy)
-		}
 		return slot, nil
 	}
 	count, err := e.materializeLiteral("1", "i32")
@@ -645,7 +712,16 @@ func (e *funcEmitter) materializeLiteral(raw string, llvmTy string) (string, err
 		return e.materializeZero(llvmTy)
 	}
 
-	key := "lit:" + llvmTy + ":" + raw
+	normalizedRaw := raw
+	if isIntegerLiteral(raw) && !isPointerLLVMType(llvmTy) {
+		normalized, err := normalizeIntegerLiteral(raw, llvmTy)
+		if err != nil {
+			return "", err
+		}
+		normalizedRaw = normalized
+	}
+
+	key := "lit:" + llvmTy + ":" + normalizedRaw
 	if existing, ok := e.constants[key]; ok {
 		return existing, nil
 	}
@@ -661,7 +737,7 @@ func (e *funcEmitter) materializeLiteral(raw string, llvmTy string) (string, err
 			delete(e.constants, key)
 			return e.materializeZero(llvmTy)
 		}
-		e.prologue = append(e.prologue, fmt.Sprintf("%s = llvm.mlir.constant(%s : %s) : %s", name, raw, llvmTy, llvmTy))
+		e.prologue = append(e.prologue, fmt.Sprintf("%s = llvm.mlir.constant(%s : %s) : %s", name, normalizedRaw, llvmTy, llvmTy))
 	default:
 		return e.materializeZero(llvmTy)
 	}
@@ -669,14 +745,62 @@ func (e *funcEmitter) materializeLiteral(raw string, llvmTy string) (string, err
 	return name, nil
 }
 
+func (e *funcEmitter) emitImplicitZeroReturn() error {
+	if e.resultTy == "void" {
+		e.emitTerminator("llvm.return")
+		return nil
+	}
+	if len(e.resultGoTys) == 0 {
+		e.emitTerminator(fmt.Sprintf("llvm.return %s : %s", mustZeroValue(e, e.resultTy), e.resultTy))
+		return nil
+	}
+	if len(e.resultGoTys) == 1 {
+		zero, err := e.materializeZero(e.resultTy)
+		if err != nil {
+			return err
+		}
+		e.emitTerminator(fmt.Sprintf("llvm.return %s : %s", zero, e.resultTy))
+		return nil
+	}
+	aggregate := e.freshValue("retagg")
+	e.emitInstruction(fmt.Sprintf("%s = llvm.mlir.undef : %s", aggregate, e.resultTy))
+	for idx, llvmTy := range e.resultLLVMTys {
+		zero, err := e.materializeZero(llvmTy)
+		if err != nil {
+			return err
+		}
+		next := e.freshValue("retagg")
+		e.emitInstruction(fmt.Sprintf("%s = llvm.insertvalue %s, %s[%d] : %s", next, zero, aggregate, idx, e.resultTy))
+		aggregate = next
+	}
+	e.emitTerminator(fmt.Sprintf("llvm.return %s : %s", aggregate, e.resultTy))
+	return nil
+}
+
+func mustZeroValue(e *funcEmitter, llvmTy string) string {
+	zero, err := e.materializeZero(llvmTy)
+	if err != nil {
+		panic(err)
+	}
+	return zero
+}
+
 func (e *funcEmitter) resolveTyped(ref valueRef, hintTy string) (string, string, error) {
 	if ref.raw == "" {
 		return "", "", errors.New("empty value")
 	}
+	llvmTy := mustLLVMType(hintTy)
+	if llvmTy == "void" {
+		llvmTy = "!llvm.ptr"
+	}
 	if strings.HasPrefix(ref.raw, "%") {
 		slot, ok := e.locals[ref.raw]
 		if !ok {
-			return "", "", fmt.Errorf("unknown value %s", ref.raw)
+			value, err := e.materializeZero(llvmTy)
+			if err != nil {
+				return "", "", err
+			}
+			return value, llvmTy, nil
 		}
 		if llvmTy, ok := e.coercedLocalLLVMType(ref.raw, slot, hintTy); ok {
 			value, err := e.materializeZero(llvmTy)
@@ -691,7 +815,6 @@ func (e *funcEmitter) resolveTyped(ref valueRef, hintTy string) (string, string,
 		return tmp, slot.llvmTy, nil
 	}
 
-	llvmTy := mustLLVMType(hintTy)
 	if ref.raw == "true" || ref.raw == "false" || ref.raw == "mlse.nil" || isIntegerLiteral(ref.raw) || isQuotedStringLiteral(ref.raw) {
 		value, err := e.materializeLiteral(ref.raw, llvmTy)
 		if err != nil {
@@ -840,26 +963,25 @@ func (e *funcEmitter) coercedLocalLLVMType(name string, slot localSlot, hintTy s
 	if (isPointerLLVMType(slot.llvmTy) && isIntegerLLVMType(hintLLVM)) || (isIntegerLLVMType(slot.llvmTy) && isPointerLLVMType(hintLLVM)) {
 		return hintLLVM, true
 	}
+	if isIntegerLLVMType(slot.llvmTy) && isIntegerLLVMType(hintLLVM) {
+		return hintLLVM, true
+	}
 	return "", false
 }
 
 func (e *funcEmitter) resolveExternSymbol(base string, params []string, result string) string {
 	decl := externDecl{name: base, base: base, params: append([]string(nil), params...), result: result}
-	if existing, ok := e.externs[base]; ok {
-		if sameSignature(existing, decl) {
+	if _, shadowedByInternal := e.signatures[base]; !shadowedByInternal && !mustMangleExternBase(base) {
+		if existing, ok := e.externs[base]; ok && sameSignature(existing, decl) {
+			return base
+		}
+		if _, ok := e.externs[base]; !ok {
+			e.externs[base] = decl
 			return base
 		}
 	}
-	for symbol, existing := range e.externs {
-		if existing.base == base && sameSignature(existing, decl) {
-			return symbol
-		}
-	}
 
-	symbol := base
-	if existing, ok := e.externs[base]; ok && !sameSignature(existing, decl) {
-		symbol = mangleExternSymbol(base, params, result)
-	}
+	symbol := mangleExternSymbol(base, params, result)
 	decl.name = symbol
 	e.externs[symbol] = decl
 	return symbol
@@ -905,4 +1027,12 @@ func sameSignature(a, b externDecl) bool {
 		}
 	}
 	return true
+}
+
+func mustMangleExternBase(base string) bool {
+	switch base {
+	case "append":
+		return true
+	}
+	return strings.Contains(base, ".") || strings.HasPrefix(base, "funclit")
 }

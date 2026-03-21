@@ -345,6 +345,19 @@ func TestSplitCallArgsMergesInlineArithmeticExpressions(t *testing.T) {
 	}
 }
 
+func TestSplitCallArgsKeepsIndexedExpressionsTogether(t *testing.T) {
+	got, err := splitCallArgs(`mlse.index %w[arith.addi %i, 1], %suffix`)
+	if err != nil {
+		t.Fatalf("splitCallArgs returned error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 args, got %d (%v)", len(got), got)
+	}
+	if got[0] != "mlse.index %w[arith.addi %i, 1]" {
+		t.Fatalf("unexpected first arg: %q", got[0])
+	}
+}
+
 func TestLowerToLLVMDialectSupportsMultiResultFunctions(t *testing.T) {
 	input := `module {
   func.func @Target(%x: i32) -> (i32, !go.error) {
@@ -401,11 +414,148 @@ func TestLowerToLLVMDialectSplitsConflictingExternalSignatures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
 	}
-	if !strings.Contains(got, "llvm.func @fmt.Sprintf(") {
-		t.Fatalf("missing base fmt.Sprintf declaration:\n%s", got)
+	if strings.Count(got, "llvm.func @fmt.Sprintf__") < 2 {
+		t.Fatalf("expected per-signature fmt.Sprintf externs:\n%s", got)
 	}
-	if !strings.Contains(got, "llvm.func @fmt.Sprintf__") {
-		t.Fatalf("missing mangled fmt.Sprintf declaration:\n%s", got)
+}
+
+func TestLowerToLLVMDialectAcceptsFunclitAssignments(t *testing.T) {
+	input := `module {
+  func.func @Target() -> !go.any {
+    %funclit1 = mlse.funclit
+    %call2 = mlse.call %funclit1() : !go.any
+    return %call2 : !go.any
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, "llvm.func @funclit1__void__ret__llvm.ptr() -> !llvm.ptr") {
+		t.Fatalf("missing funclit extern declaration:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersLocalIncDec(t *testing.T) {
+	input := `module {
+  func.func @Target() -> i32 {
+    %x = 1 : i32
+    mlse.++ %x : i32
+    mlse.-- %x : i32
+    return %x : i32
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, "llvm.add") || !strings.Contains(got, "llvm.sub") {
+		t.Fatalf("missing inc/dec lowering:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectAcceptsCallWithColonInsideString(t *testing.T) {
+	input := `module {
+  func.func @Target(%x: !go.named<"uint64">, %vname: !go.ptr<!go.named<"byte">>) {
+    %call1 = mlse.call mlse.select %stdio.Printf("...checksum after hashing %s : %lX\n", %vname, mlse.binop__ %x, 0xFFFFFFFF) : !go.any
+    mlse.expr %call1 : !go.any
+    return
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, "llvm.func @stdio.Printf__") {
+		t.Fatalf("missing lowered external call:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectSupportsGotoLabels(t *testing.T) {
+	input := `module {
+  func.func @Target(%flag: i1) -> i32 {
+    mlse.label @label
+    mlse.if %flag : i1 {
+        mlse.branch "goto" @label
+    }
+    return 0 : i32
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, "^label:") {
+		t.Fatalf("missing named label block:\n%s", got)
+	}
+	if !strings.Contains(got, "llvm.br ^label") {
+		t.Fatalf("missing goto branch:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectManglesVariantInternalCallFallbacks(t *testing.T) {
+	input := `module {
+  func.func @platform_main_begin() {
+    return
+  }
+  func.func @Target() {
+    %call1 = mlse.call %platform_main_begin() : !go.any
+    mlse.expr %call1 : !go.any
+    return
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, "llvm.func @platform_main_begin__void__ret__llvm.ptr() -> !llvm.ptr") {
+		t.Fatalf("missing mangled extern fallback:\n%s", got)
+	}
+	if !strings.Contains(got, "llvm.call @platform_main_begin__void__ret__llvm.ptr()") {
+		t.Fatalf("missing mangled call fallback:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectFallsBackForUnknownValues(t *testing.T) {
+	input := `module {
+  func.func @Target() -> i32 {
+    %x = %missing : i32
+    return %x : i32
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, "llvm.mlir.zero : i32") {
+		t.Fatalf("missing zero fallback for unknown value:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectAcceptsDiscardTypeChanges(t *testing.T) {
+	input := `module {
+  func.func @Target() {
+    %_ = 0 : i32
+    %_ = mlse.nil : !go.nil
+    return
+  }
+}
+`
+
+	if _, err := LowerToLLVMDialectModule(input); err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
 	}
 }
 
@@ -443,5 +593,45 @@ func TestLowerToLLVMDialectKeepsMlseLoadBasePointerTyped(t *testing.T) {
 	}
 	if strings.Contains(got, "llvm.load %zero") && strings.Contains(got, "-> i32") {
 		t.Fatalf("unexpected integer zero used as load base:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectNormalizesOutOfRangeIntegerLiterals(t *testing.T) {
+	input := `module {
+  func.func @Target() -> i32 {
+    %x = 57915251962860314 : i32
+    return %x : i32
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if strings.Contains(got, "57915251962860314 : i32") {
+		t.Fatalf("expected out-of-range literal to be normalized:\n%s", got)
+	}
+	if !strings.Contains(got, "llvm.mlir.constant(") {
+		t.Fatalf("missing lowered constant:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectAddsImplicitZeroReturnForMissingTerminator(t *testing.T) {
+	input := `module {
+  func.func @Target(%flag: i1) -> i32 {
+    mlse.if %flag : i1 {
+        return 7 : i32
+    }
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, "llvm.return %zero") && !strings.Contains(got, "llvm.return %c") {
+		t.Fatalf("expected implicit fallback return in output:\n%s", got)
 	}
 }
