@@ -219,6 +219,63 @@ func f() {
 	}
 }
 
+func TestCompileFileEmitsGotoLabelTargets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "goto.go")
+	source := `package demo
+
+func f(flag bool) int {
+label:
+	if flag {
+		goto label
+	}
+	return 0
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got, err := CompileFileGoIRLike(path)
+	if err != nil {
+		t.Fatalf("CompileFile returned error: %v", err)
+	}
+	if !strings.Contains(got, "mlse.label @label") {
+		t.Fatalf("expected label in output:\n%s", got)
+	}
+	if !strings.Contains(got, `mlse.branch "goto" @label`) {
+		t.Fatalf("expected goto target in output:\n%s", got)
+	}
+}
+
+func TestCompileFileTypeSwitchNoLongerEmitsUnsupportedStmt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "typeswitch.go")
+	source := `package demo
+
+func f(v any) int {
+	switch v.(type) {
+	default:
+		panic("unsupported")
+	}
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got, err := CompileFileGoIRLike(path)
+	if err != nil {
+		t.Fatalf("CompileFile returned error: %v", err)
+	}
+	if strings.Contains(got, `mlse.unsupported_stmt "TypeSwitchStmt"`) {
+		t.Fatalf("unexpected TypeSwitchStmt placeholder:\n%s", got)
+	}
+	if !strings.Contains(got, `mlse.expr "TypeSwitchStmt" : !go.any`) {
+		t.Fatalf("expected type-switch marker expr:\n%s", got)
+	}
+}
+
 func TestEmitParamsAssignsSyntheticNamesForUnnamedParams(t *testing.T) {
 	fn := parseFirstFunc(t, `package demo
 

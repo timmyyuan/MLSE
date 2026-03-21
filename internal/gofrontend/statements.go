@@ -25,11 +25,16 @@ func emitStmt(stmt ast.Stmt, env *env) string {
 	case *ast.RangeStmt:
 		return emitRangeStmt(s, env)
 	case *ast.BranchStmt:
+		if s.Label != nil {
+			return fmt.Sprintf("    mlse.branch %q @%s\n", s.Tok.String(), sanitizeName(s.Label.Name))
+		}
 		return fmt.Sprintf("    mlse.branch %q\n", s.Tok.String())
 	case *ast.IncDecStmt:
 		return emitIncDecStmt(s, env)
 	case *ast.SwitchStmt:
 		return emitSwitchStmt(s, env)
+	case *ast.TypeSwitchStmt:
+		return emitTypeSwitchStmt(s, env)
 	case *ast.GoStmt:
 		value, ty, prelude := emitExpr(s.Call, env)
 		return prelude + fmt.Sprintf("    mlse.go %s : %s\n", value, ty)
@@ -245,6 +250,26 @@ func emitSwitchStmt(s *ast.SwitchStmt, env *env) string {
 		buf.WriteString(indentBlock(emitCaseClause(clause, env), 1))
 	}
 	buf.WriteString("    }\n")
+	return buf.String()
+}
+
+func emitTypeSwitchStmt(s *ast.TypeSwitchStmt, env *env) string {
+	var buf strings.Builder
+	if s.Init != nil {
+		buf.WriteString(emitStmt(s.Init, env))
+	}
+	buf.WriteString("    mlse.expr \"TypeSwitchStmt\" : !go.any\n")
+
+	for _, stmt := range s.Body.List {
+		clause, ok := stmt.(*ast.CaseClause)
+		if !ok || len(clause.List) != 0 {
+			continue
+		}
+		for _, bodyStmt := range clause.Body {
+			buf.WriteString(emitStmt(bodyStmt, env))
+		}
+		return buf.String()
+	}
 	return buf.String()
 }
 
