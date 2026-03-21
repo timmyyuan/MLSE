@@ -15,8 +15,9 @@ func emitLLVMDialectModule(mod *module) (string, error) {
 
 	var defs []string
 	externs := map[string]externDecl{}
+	stringGlobals := map[string]stringGlobalDecl{}
 	for _, fn := range mod.funcs {
-		text, fnExterns, err := emitLLVMDialectFunction(fn, signatures)
+		text, fnExterns, fnStrings, err := emitLLVMDialectFunction(fn, signatures)
 		if err != nil {
 			return "", err
 		}
@@ -33,10 +34,27 @@ func emitLLVMDialectModule(mod *module) (string, error) {
 			}
 			externs[name] = decl
 		}
+		for name, decl := range fnStrings {
+			stringGlobals[name] = decl
+		}
 	}
 
 	var b strings.Builder
 	b.WriteString("module {\n")
+	if len(stringGlobals) > 0 {
+		names := make([]string, 0, len(stringGlobals))
+		for name := range stringGlobals {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			decl := stringGlobals[name]
+			b.WriteString(fmt.Sprintf("  llvm.mlir.global internal constant @%s(%s) {addr_space = 0 : i32}\n", decl.name, decl.encoded))
+		}
+		if len(externs) > 0 || len(defs) > 0 {
+			b.WriteString("\n")
+		}
+	}
 	if len(externs) > 0 {
 		names := make([]string, 0, len(externs))
 		for name := range externs {
@@ -72,7 +90,7 @@ func formatExternDecl(decl externDecl) string {
 	return b.String()
 }
 
-func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (string, map[string]externDecl, error) {
+func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (string, map[string]externDecl, map[string]stringGlobalDecl, error) {
 	resultGoTys := append([]string(nil), fn.results...)
 	resultLLVMTys := make([]string, 0, len(fn.results))
 	for _, goTy := range fn.results {
@@ -86,6 +104,7 @@ func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (str
 		resultGoTys:   resultGoTys,
 		resultLLVMTys: resultLLVMTys,
 		resultTy:      llvmFunctionResultType(resultLLVMTys),
+		stringGlobals: map[string]stringGlobalDecl{},
 	}
 
 	paramDefs := make([]string, 0, len(fn.params))
@@ -93,14 +112,14 @@ func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (str
 		llvmTy := mustLLVMType(param.ty)
 		paramDefs = append(paramDefs, fmt.Sprintf("%s: %s", param.name, llvmTy))
 		if err := emitter.bindParam(param); err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 	}
 
 	emitter.startEntryBlock()
 	for _, inst := range fn.body {
 		if err := inst.emit(emitter); err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 	}
 
@@ -111,7 +130,7 @@ func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (str
 		emitter.emitTerminator("llvm.return")
 	default:
 		if err := emitter.emitImplicitZeroReturn(); err != nil {
-			return "", nil, fmt.Errorf("function %s falls off the end without returning %s: %v", fn.name, emitter.resultTy, err)
+			return "", nil, nil, fmt.Errorf("function %s falls off the end without returning %s: %v", fn.name, emitter.resultTy, err)
 		}
 	}
 
@@ -132,7 +151,7 @@ func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (str
 		b.WriteString("\n")
 	}
 	b.WriteString("  }\n")
-	return b.String(), emitter.externs, nil
+	return b.String(), emitter.externs, emitter.stringGlobals, nil
 }
 
 func (i *aliasInst) emit(e *funcEmitter) error {
@@ -708,7 +727,12 @@ func (e *funcEmitter) materializeLiteral(raw string, llvmTy string) (string, err
 		return "", errors.New("cannot materialize literal for void")
 	}
 	switch {
-	case raw == "false", raw == "0", raw == "mlse.nil", isQuotedStringLiteral(raw):
+	case raw == "false", raw == "0", raw == "mlse.nil":
+		return e.materializeZero(llvmTy)
+	case isQuotedStringLiteral(raw):
+		if llvmTy == "!llvm.ptr" {
+			return e.materializeStringLiteral(raw)
+		}
 		return e.materializeZero(llvmTy)
 	}
 
@@ -785,6 +809,69 @@ func mustZeroValue(e *funcEmitter, llvmTy string) string {
 	return zero
 }
 
+func (e *funcEmitter) materializeStringLiteral(raw string) (string, error) {
+	unquoted, err := unquoteGoStringLiteral(raw)
+	if err != nil {
+		return "", err
+	}
+	encoded := quoteLLVMStringBytes(unquoted + "\x00")
+	key := "str:" + encoded
+	if existing, ok := e.constants[key]; ok {
+		return existing, nil
+	}
+	name := fmt.Sprintf("str%d", len(e.stringGlobals))
+	e.stringGlobals[name] = stringGlobalDecl{name: name, encoded: encoded, length: len(unquoted) + 1}
+	addr := e.freshValue("str")
+	e.constants[key] = addr
+	e.prologue = append(e.prologue,
+		fmt.Sprintf("%s = llvm.mlir.addressof @%s : !llvm.ptr", addr, name),
+	)
+	return addr, nil
+}
+
+func (e *funcEmitter) resolveIndex(raw string, hintTy string) (string, string, error) {
+	baseRaw, indexRaw, ok := splitMLSEIndexExpr(raw)
+	if !ok {
+		value, err := e.materializeZero(mustLLVMType(hintTy))
+		if err != nil {
+			return "", "", err
+		}
+		return value, mustLLVMType(hintTy), nil
+	}
+	base, baseTy, err := e.resolveTyped(valueRef{raw: baseRaw, ty: "!go.any"}, "!go.any")
+	if err != nil {
+		return "", "", err
+	}
+	idx, idxTy, err := e.resolveTyped(valueRef{raw: indexRaw, ty: "i32"}, "i32")
+	if err != nil {
+		return "", "", err
+	}
+	if !isPointerLLVMType(baseTy) || !isIntegerLLVMType(idxTy) {
+		value, err := e.materializeZero(mustLLVMType(hintTy))
+		if err != nil {
+			return "", "", err
+		}
+		return value, mustLLVMType(hintTy), nil
+	}
+	resultTy := mustLLVMType(hintTy)
+	if !isIntegerLLVMType(resultTy) && resultTy != "!llvm.ptr" {
+		value, err := e.materializeZero(resultTy)
+		if err != nil {
+			return "", "", err
+		}
+		return value, resultTy, nil
+	}
+	ptr := e.freshValue("idxptr")
+	e.emitInstruction(fmt.Sprintf("%s = llvm.getelementptr %s[%s] : (!llvm.ptr, i32) -> !llvm.ptr, %s", ptr, base, idx, resultTy))
+	if resultTy == "!llvm.ptr" {
+		return ptr, resultTy, nil
+	}
+	loaded := e.freshValue("idx")
+	align := alignmentForLLVMType(resultTy)
+	e.emitInstruction(fmt.Sprintf("%s = llvm.load %s {alignment = %d : i64} : !llvm.ptr -> %s", loaded, ptr, align, resultTy))
+	return loaded, resultTy, nil
+}
+
 func (e *funcEmitter) resolveTyped(ref valueRef, hintTy string) (string, string, error) {
 	if ref.raw == "" {
 		return "", "", errors.New("empty value")
@@ -841,6 +928,8 @@ func (e *funcEmitter) resolveTyped(ref valueRef, hintTy string) (string, string,
 		notValue := e.freshValue("not")
 		e.emitInstruction(fmt.Sprintf("%s = llvm.icmp %q %s, %s : i1", notValue, "eq", cond, zero))
 		return notValue, "i1", nil
+	case strings.HasPrefix(ref.raw, "mlse.index "):
+		return e.resolveIndex(ref.raw, hintTy)
 	case strings.HasPrefix(ref.raw, "mlse.addr "):
 		innerRaw := strings.TrimSpace(strings.TrimPrefix(ref.raw, "mlse.addr "))
 		if strings.HasPrefix(innerRaw, "%") {
@@ -893,7 +982,6 @@ func (e *funcEmitter) resolveTyped(ref valueRef, hintTy string) (string, string,
 		e.emitInstruction(fmt.Sprintf("%s = llvm.sub %s, %s : %s", tmp, zero, value, innerTy))
 		return tmp, innerTy, nil
 	case strings.HasPrefix(ref.raw, "mlse.select "),
-		strings.HasPrefix(ref.raw, "mlse.index "),
 		strings.HasPrefix(ref.raw, "mlse.slice "),
 		strings.HasPrefix(ref.raw, "mlse.typeassert "),
 		strings.HasPrefix(ref.raw, "mlse.composite "),

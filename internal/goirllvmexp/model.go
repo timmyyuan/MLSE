@@ -61,9 +61,21 @@ type exprInst struct {
 	ref  valueRef
 }
 
+type labelInst struct {
+	line  int
+	label string
+}
+
 type branchInst struct {
-	line int
-	kind string
+	line  int
+	kind  string
+	label string
+}
+
+type incDecInst struct {
+	line   int
+	op     string
+	target valueRef
 }
 
 type storeInst struct {
@@ -122,6 +134,12 @@ type externDecl struct {
 	result string
 }
 
+type stringGlobalDecl struct {
+	name    string
+	encoded string
+	length  int
+}
+
 type localSlot struct {
 	goTy   string
 	llvmTy string
@@ -140,12 +158,14 @@ type funcEmitter struct {
 	resultTy      string
 	blockSeq      int
 	valueSeq      int
+	stringSeq     int
 	controlDepth  int
 	current       string
 	hasCurrent    bool
 	entryActive   bool
 	terminated    bool
 	loopStack     []loopLabels
+	stringGlobals map[string]stringGlobalDecl
 }
 
 type loopLabels struct {

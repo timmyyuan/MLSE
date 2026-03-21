@@ -635,3 +635,45 @@ func TestLowerToLLVMDialectAddsImplicitZeroReturnForMissingTerminator(t *testing
 		t.Fatalf("expected implicit fallback return in output:\n%s", got)
 	}
 }
+
+func TestLowerToLLVMDialectMaterializesStringLiteralsAsGlobals(t *testing.T) {
+	input := `module {
+  func.func @Target() -> !go.string {
+    return "hi" : !go.string
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, `llvm.mlir.global internal constant @str0("hi\00")`) {
+		t.Fatalf("missing string global in output:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.mlir.addressof @str0 : !llvm.ptr`) {
+		t.Fatalf("missing string global address in output:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersStringIndexToGEPAndLoad(t *testing.T) {
+	input := `module {
+  func.func @Target() -> i8 {
+    %s = "hi" : !go.string
+    %c = mlse.index %s[1] : !go.named<"byte">
+    return %c : !go.named<"byte">
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, `llvm.getelementptr`) {
+		t.Fatalf("missing index gep in output:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.load`) {
+		t.Fatalf("missing index load in output:\n%s", got)
+	}
+}

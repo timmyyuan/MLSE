@@ -3,6 +3,7 @@ package goirllvmexp
 import (
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -294,4 +295,38 @@ func llvmCallResultText(llvmTy string) string {
 
 func isQuotedStringLiteral(raw string) bool {
 	return len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"'
+}
+
+func unquoteGoStringLiteral(raw string) (string, error) {
+	return strconv.Unquote(raw)
+}
+
+func quoteLLVMStringBytes(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 32 && c <= 126 && c != '"' && c != '\\' {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteString(fmt.Sprintf("\\%02X", c))
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+func splitMLSEIndexExpr(raw string) (string, string, bool) {
+	text := strings.TrimSpace(strings.TrimPrefix(raw, "mlse.index "))
+	end := strings.LastIndexByte(text, ']')
+	start := strings.LastIndexByte(text[:end], '[')
+	if end < 0 || start < 0 || start+1 > end {
+		return "", "", false
+	}
+	base := strings.TrimSpace(text[:start])
+	index := strings.TrimSpace(text[start+1 : end])
+	if base == "" || index == "" {
+		return "", "", false
+	}
+	return base, index, true
 }
