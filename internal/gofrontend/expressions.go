@@ -105,15 +105,16 @@ func emitExpr(expr ast.Expr, env *env) (value string, ty string, prelude string)
 	case *ast.ParenExpr:
 		return emitExpr(e.X, env)
 	case *ast.CompositeLit:
+		litTy := goTypeToMLIR(e.Type)
 		tmp := env.temp("lit")
-		return tmp, goTypeToMLIR(e.Type), fmt.Sprintf("    %s = mlse.composite %q : %s\n", tmp, shortNodeName(e), goTypeToMLIR(e.Type))
+		return tmp, litTy, fmt.Sprintf("    %s = mlse.composite %q : %s\n", tmp, shortNodeName(e), litTy)
 	case *ast.IndexExpr:
-		x, _, px := emitExpr(e.X, env)
+		x, xTy, px := emitExpr(e.X, env)
 		idx, _, pi := emitExpr(e.Index, env)
-		return fmt.Sprintf("mlse.index %s[%s]", x, idx), "!go.any", px + pi
+		return fmt.Sprintf("mlse.index %s[%s]", x, idx), rangeValueType(xTy), px + pi
 	case *ast.SliceExpr:
-		x, _, px := emitExpr(e.X, env)
-		return fmt.Sprintf("mlse.slice %s", x), "!go.any", px
+		x, xTy, px := emitExpr(e.X, env)
+		return fmt.Sprintf("mlse.slice %s", x), inferSliceExprType(e, xTy), px
 	case *ast.TypeAssertExpr:
 		x, _, px := emitExpr(e.X, env)
 		return fmt.Sprintf("mlse.typeassert %s", x), goTypeToMLIR(e.Type), px
@@ -215,6 +216,20 @@ func inferCallResultType(call *ast.CallExpr, env *env) string {
 		case "fmt.Errorf":
 			return "!go.error"
 		}
+	}
+	return "!go.any"
+}
+
+func inferSliceExprType(expr *ast.SliceExpr, baseTy string) string {
+	if strings.HasPrefix(baseTy, "!go.string") {
+		return "!go.string"
+	}
+	if strings.HasPrefix(baseTy, "!go.slice<") {
+		return baseTy
+	}
+	if strings.HasPrefix(baseTy, "!go.array<") {
+		elem := strings.TrimSuffix(strings.TrimPrefix(baseTy, "!go.array<"), ">")
+		return "!go.slice<" + elem + ">"
 	}
 	return "!go.any"
 }

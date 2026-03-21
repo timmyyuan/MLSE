@@ -276,6 +276,37 @@ func f(v any) int {
 	}
 }
 
+func TestCompileFilePreservesIndexAndSliceTypes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index_slice.go")
+	source := `package demo
+
+func f(xs []int, s string) (int, []int, string) {
+	v := xs[0]
+	a := xs[1:]
+	b := s[1:]
+	return v, a, b
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got, err := CompileFileGoIRLike(path)
+	if err != nil {
+		t.Fatalf("CompileFile returned error: %v", err)
+	}
+	if !strings.Contains(got, `mlse.index %xs[0] : i32`) {
+		t.Fatalf("expected typed slice index result:\n%s", got)
+	}
+	if !strings.Contains(got, `mlse.slice %xs : !go.slice<i32>`) {
+		t.Fatalf("expected typed slice expression:\n%s", got)
+	}
+	if !strings.Contains(got, `mlse.slice %s : !go.string`) {
+		t.Fatalf("expected typed string slice expression:\n%s", got)
+	}
+}
+
 func TestEmitParamsAssignsSyntheticNamesForUnnamedParams(t *testing.T) {
 	fn := parseFirstFunc(t, `package demo
 
