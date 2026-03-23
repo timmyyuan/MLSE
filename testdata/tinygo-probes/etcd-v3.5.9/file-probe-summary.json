@@ -1,0 +1,134 @@
+{
+  "probe_mode": "package-context-file-attribution",
+  "repo_dir": "tmp/etcd-targets/helper-smoke-v359",
+  "target_metadata": {
+    "repo": "etcd",
+    "requested_ref": "v3.5.9",
+    "resolved_commit": "bdbbde998b7ed434b23676530d10dbd601c4a7c0",
+    "source_repo": "<local-etcd-git-clone>",
+    "target_dir": "tmp/etcd-targets/helper-smoke-v359",
+    "go": "1.19",
+    "toolchain": null
+  },
+  "tinygo_version": "tinygo version 0.40.1 darwin/arm64 (using go version go1.25.8 and LLVM version 20.1.1)",
+  "modules_total": 12,
+  "package_contexts_total": 145,
+  "covered_go_files": 644,
+  "successful_go_files": 47,
+  "failed_go_files": 597,
+  "covered_success_rate": 0.07298136645962733,
+  "omitted_test_go_files": 314,
+  "snapshot_dir": "testdata/tinygo-probes/etcd-v3.5.9",
+  "success_list": "testdata/tinygo-probes/etcd-v3.5.9/file-probe-success.txt",
+  "fail_list": "testdata/tinygo-probes/etcd-v3.5.9/file-probe-fail.txt",
+  "omitted_list": "testdata/tinygo-probes/etcd-v3.5.9/file-probe-omitted-test-files.txt",
+  "results_jsonl": "testdata/tinygo-probes/etcd-v3.5.9/file-probe-results.jsonl",
+  "failure_reasons": "testdata/tinygo-probes/etcd-v3.5.9/file-probe-failure-reasons.txt",
+  "top_failure_reasons": [
+    {
+      "reason": "../server/mvcc/index.go:21:2: module lookup disabled by GOPROXY=off",
+      "count": 76,
+      "example": "tmp/etcd-targets/helper-smoke-v359/etcdctl/main.go"
+    },
+    {
+      "reason": "mvcc/index.go:21:2: module lookup disabled by GOPROXY=off",
+      "count": 59,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/embed/config.go"
+    },
+    {
+      "reason": "logger.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 53,
+      "example": "tmp/etcd-targets/helper-smoke-v359/client/v3/auth.go"
+    },
+    {
+      "reason": "functional/tester/metrics_report.go:21:2: module lookup disabled by GOPROXY=off",
+      "count": 30,
+      "example": "tmp/etcd-targets/helper-smoke-v359/tests/functional/cmd/etcd-tester/main.go"
+    },
+    {
+      "reason": "fileutil/preallocate_darwin.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 27,
+      "example": "tmp/etcd-targets/helper-smoke-v359/client/pkg/fileutil/dir_unix.go"
+    },
+    {
+      "reason": "raftpb/raft.pb.go:13:2: module lookup disabled by GOPROXY=off",
+      "count": 21,
+      "example": "tmp/etcd-targets/helper-smoke-v359/raft/bootstrap.go"
+    },
+    {
+      "reason": "mvcc/metrics.go:20:2: module lookup disabled by GOPROXY=off",
+      "count": 21,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/etcdserver/api/v3compactor/compactor.go"
+    },
+    {
+      "reason": "rafttest/interaction_env_handler.go:22:2: module lookup disabled by GOPROXY=off",
+      "count": 18,
+      "example": "tmp/etcd-targets/helper-smoke-v359/raft/rafttest/doc.go"
+    },
+    {
+      "reason": "proxy/grpcproxy/metrics.go:26:2: module lookup disabled by GOPROXY=off",
+      "count": 18,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/proxy/grpcproxy/auth.go"
+    },
+    {
+      "reason": "etcdserver/api/rafthttp/stream.go:35:2: module lookup disabled by GOPROXY=off",
+      "count": 16,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/etcdserver/api/rafthttp/coder.go"
+    },
+    {
+      "reason": "mvcc/backend/metrics.go:17:8: module lookup disabled by GOPROXY=off",
+      "count": 15,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/etcdserver/api/v3alarm/alarms.go"
+    },
+    {
+      "reason": "tools/benchmark/cmd/util.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 15,
+      "example": "tmp/etcd-targets/helper-smoke-v359/tools/benchmark/doc.go"
+    },
+    {
+      "reason": "mvcc/backend/backend.go:30:2: module lookup disabled by GOPROXY=off",
+      "count": 14,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/auth/doc.go"
+    },
+    {
+      "reason": "etcdserver/api/v2store/node.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 14,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/etcdserver/api/v2store/doc.go"
+    },
+    {
+      "reason": "integration/testing.go:22:2: module lookup disabled by GOPROXY=off",
+      "count": 13,
+      "example": "tmp/etcd-targets/helper-smoke-v359/tests/e2e/doc.go"
+    },
+    {
+      "reason": "json.go:22:2: module lookup disabled by GOPROXY=off",
+      "count": 12,
+      "example": "tmp/etcd-targets/helper-smoke-v359/client/v2/auth_role.go"
+    },
+    {
+      "reason": "mvcc/backend/backend.go:29:2: module lookup disabled by GOPROXY=off",
+      "count": 12,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/etcdserver/api/capability.go"
+    },
+    {
+      "reason": "proxy/grpcproxy/cache/store.go:23:2: module lookup disabled by GOPROXY=off",
+      "count": 10,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/main.go"
+    },
+    {
+      "reason": "proxy/grpcproxy/adapter/chan_stream.go:22:2: module lookup disabled by GOPROXY=off",
+      "count": 10,
+      "example": "tmp/etcd-targets/helper-smoke-v359/server/proxy/grpcproxy/adapter/auth_client_adapter.go"
+    },
+    {
+      "reason": "functional/runner/help.go:31:2: module lookup disabled by GOPROXY=off",
+      "count": 9,
+      "example": "tmp/etcd-targets/helper-smoke-v359/tests/functional/cmd/etcd-runner/main.go"
+    }
+  ],
+  "methodology_notes": [
+    "Each non-test Go file inherits the build result of its package context instead of being compiled as a standalone source file.",
+    "Library packages are compiled through generated blank-import stubs so TinyGo can analyze them without forcing package main.",
+    "Test files are reported separately as omitted because the current probe does not run tinygo test."
+  ]
+}

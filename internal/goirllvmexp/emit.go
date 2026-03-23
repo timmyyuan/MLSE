@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-func emitLLVMDialectModule(mod *module) (string, error) {
+func emitLLVMDialectModule(mod *module, opts LoweringOptions) (string, error) {
 	signatures := make(map[string]*function, len(mod.funcs))
 	for _, fn := range mod.funcs {
 		signatures[fn.name] = fn
@@ -17,7 +17,7 @@ func emitLLVMDialectModule(mod *module) (string, error) {
 	externs := map[string]externDecl{}
 	stringGlobals := map[string]stringGlobalDecl{}
 	for _, fn := range mod.funcs {
-		text, fnExterns, fnStrings, err := emitLLVMDialectFunction(fn, signatures)
+		text, fnExterns, fnStrings, err := emitLLVMDialectFunction(fn, signatures, opts)
 		if err != nil {
 			return "", err
 		}
@@ -90,17 +90,19 @@ func formatExternDecl(decl externDecl) string {
 	return b.String()
 }
 
-func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (string, map[string]externDecl, map[string]stringGlobalDecl, error) {
+func emitLLVMDialectFunction(fn *function, signatures map[string]*function, opts LoweringOptions) (string, map[string]externDecl, map[string]stringGlobalDecl, error) {
 	resultGoTys := append([]string(nil), fn.results...)
 	resultLLVMTys := make([]string, 0, len(fn.results))
 	for _, goTy := range fn.results {
-		resultLLVMTys = append(resultLLVMTys, mustLLVMType(goTy))
+		resultLLVMTys = append(resultLLVMTys, mustLLVMTypeWithOptions(goTy, opts))
 	}
 	emitter := &funcEmitter{
 		signatures:    signatures,
 		externs:       map[string]externDecl{},
 		locals:        map[string]localSlot{},
 		constants:     map[string]string{},
+		options:       opts,
+		sliceLayout:   newSliceLayout(opts.SliceModel),
 		resultGoTys:   resultGoTys,
 		resultLLVMTys: resultLLVMTys,
 		resultTy:      llvmFunctionResultType(resultLLVMTys),
@@ -109,7 +111,7 @@ func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (str
 
 	paramDefs := make([]string, 0, len(fn.params))
 	for _, param := range fn.params {
-		llvmTy := mustLLVMType(param.ty)
+		llvmTy := mustLLVMTypeWithOptions(param.ty, opts)
 		paramDefs = append(paramDefs, fmt.Sprintf("%s: %s", param.name, llvmTy))
 		if err := emitter.bindParam(param); err != nil {
 			return "", nil, nil, err
@@ -154,6 +156,10 @@ func emitLLVMDialectFunction(fn *function, signatures map[string]*function) (str
 	return b.String(), emitter.externs, emitter.stringGlobals, nil
 }
 
+func (e *funcEmitter) llvmType(goTy string) string {
+	return mustLLVMTypeWithOptions(goTy, e.options)
+}
+
 func (i *aliasInst) emit(e *funcEmitter) error {
 	storeGoTy := e.preferredLocalGoType(i.dest.name, i.dest.ty)
 	value, llvmTy, err := e.resolveTyped(i.src, storeGoTy)
@@ -167,7 +173,7 @@ func (i *aliasInst) emit(e *funcEmitter) error {
 }
 
 func (i *binaryInst) emit(e *funcEmitter) error {
-	llvmTy := mustLLVMType(i.dest.ty)
+	llvmTy := e.llvmType(i.dest.ty)
 	lhs, _, err := e.resolveTyped(i.lhs, i.dest.ty)
 	if err != nil {
 		return fmt.Errorf("line %d: %v", i.line, err)
@@ -215,7 +221,11 @@ func (i *binaryInst) emit(e *funcEmitter) error {
 }
 
 func (i *callInst) emit(e *funcEmitter) error {
-	retTy := mustLLVMType(i.dest.ty)
+	if handled, err := i.emitBuiltin(e); handled || err != nil {
+		return err
+	}
+
+	retTy := e.llvmType(i.dest.ty)
 	argValues := make([]string, 0, len(i.args))
 	argTys := make([]string, 0, len(i.args))
 	for _, arg := range i.args {
@@ -223,7 +233,7 @@ func (i *callInst) emit(e *funcEmitter) error {
 		if goTy == "" {
 			goTy = e.typeOfValue(arg.raw)
 		}
-		llvmTy := mustLLVMType(goTy)
+		llvmTy := e.llvmType(goTy)
 		value, actualTy, err := e.resolveTyped(arg, goTy)
 		if err != nil {
 			return fmt.Errorf("line %d: %v", i.line, err)
@@ -243,12 +253,12 @@ func (i *callInst) emit(e *funcEmitter) error {
 			case 0:
 				matches = retTy == "void"
 			case 1:
-				matches = mustLLVMType(fn.results[0]) == retTy
+				matches = e.llvmType(fn.results[0]) == retTy
 			}
 		}
 		if matches {
 			for idx, param := range fn.params {
-				if mustLLVMType(param.ty) != argTys[idx] {
+				if e.llvmType(param.ty) != argTys[idx] {
 					matches = false
 					break
 				}
@@ -270,6 +280,85 @@ func (i *callInst) emit(e *funcEmitter) error {
 	callTmp := e.freshValue("call")
 	e.emitInstruction(fmt.Sprintf("%s = %s", callTmp, callText))
 	return e.storeLocal(i.dest.name, i.dest.ty, retTy, callTmp)
+}
+
+func (i *callInst) emitBuiltin(e *funcEmitter) (bool, error) {
+	switch i.callee {
+	case "len":
+		return i.emitBuiltinLen(e)
+	case "cap":
+		return i.emitBuiltinCap(e)
+	default:
+		return false, nil
+	}
+}
+
+func (i *callInst) emitBuiltinLen(e *funcEmitter) (bool, error) {
+	if len(i.args) != 1 {
+		return false, nil
+	}
+
+	argGoTy := i.args[0].ty
+	if argGoTy == "" {
+		argGoTy = e.typeOfValue(i.args[0].raw)
+	}
+	if !isGoSliceType(argGoTy) {
+		return false, nil
+	}
+
+	value, llvmTy, err := e.resolveTyped(i.args[0], argGoTy)
+	if err != nil {
+		return true, fmt.Errorf("line %d: %v", i.line, err)
+	}
+	if llvmTy != e.sliceLayout.llvmType() {
+		return true, fmt.Errorf("line %d: len expects slice value, got %s", i.line, llvmTy)
+	}
+
+	length, err := e.extractSliceLength(value, llvmTy)
+	if err != nil {
+		return true, fmt.Errorf("line %d: %v", i.line, err)
+	}
+	if i.dest.name == "%_" {
+		return true, nil
+	}
+	if err := e.storeLocal(i.dest.name, i.dest.ty, "i32", length); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (i *callInst) emitBuiltinCap(e *funcEmitter) (bool, error) {
+	if !e.sliceLayout.hasCap() || len(i.args) != 1 {
+		return false, nil
+	}
+
+	argGoTy := i.args[0].ty
+	if argGoTy == "" {
+		argGoTy = e.typeOfValue(i.args[0].raw)
+	}
+	if !isGoSliceType(argGoTy) {
+		return false, nil
+	}
+
+	value, llvmTy, err := e.resolveTyped(i.args[0], argGoTy)
+	if err != nil {
+		return true, fmt.Errorf("line %d: %v", i.line, err)
+	}
+	if llvmTy != e.sliceLayout.llvmType() {
+		return true, fmt.Errorf("line %d: cap expects slice value, got %s", i.line, llvmTy)
+	}
+
+	capacity, err := e.extractSliceCapacity(value, llvmTy)
+	if err != nil {
+		return true, fmt.Errorf("line %d: %v", i.line, err)
+	}
+	if i.dest.name == "%_" {
+		return true, nil
+	}
+	if err := e.storeLocal(i.dest.name, i.dest.ty, "i32", capacity); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (i *returnInst) emit(e *funcEmitter) error {
@@ -396,7 +485,7 @@ func (c *valueCondition) emit(e *funcEmitter, line int) (string, error) {
 }
 
 func (c *compareCondition) emit(e *funcEmitter, line int) (string, error) {
-	llvmTy := mustLLVMType(c.ty)
+	llvmTy := e.llvmType(c.ty)
 	if !isIntegerLLVMType(llvmTy) && !isPointerLLVMType(llvmTy) {
 		return "", fmt.Errorf("line %d: unsupported compare condition type %q", line, c.ty)
 	}
@@ -524,7 +613,7 @@ func (i *switchInst) emit(e *funcEmitter) error {
 		if len(switchCase.values) != 1 {
 			return fmt.Errorf("line %d: only single-value switch cases are supported", switchCase.line)
 		}
-		if mustLLVMType(switchCase.ty) != tagLLVM {
+		if e.llvmType(switchCase.ty) != tagLLVM {
 			return fmt.Errorf("line %d: switch case type %q does not match tag type %q", switchCase.line, switchCase.ty, i.tag.ty)
 		}
 		caseIndices = append(caseIndices, idx)
@@ -616,7 +705,7 @@ func (e *funcEmitter) emitControlBody(body []instruction) error {
 }
 
 func (e *funcEmitter) bindParam(param typedValue) error {
-	llvmTy := mustLLVMType(param.ty)
+	llvmTy := e.llvmType(param.ty)
 	slot, err := e.ensureLocal(param.name, param.ty, llvmTy)
 	if err != nil {
 		return err
@@ -829,31 +918,181 @@ func (e *funcEmitter) materializeStringLiteral(raw string) (string, error) {
 	return addr, nil
 }
 
-func (e *funcEmitter) resolveIndex(raw string, hintTy string) (string, string, error) {
-	baseRaw, indexRaw, ok := splitMLSEIndexExpr(raw)
+func (e *funcEmitter) extractSliceData(value string, llvmTy string) (string, error) {
+	return e.sliceLayout.extract(e, value, llvmTy, sliceFieldData)
+}
+
+func (e *funcEmitter) extractSliceLength(value string, llvmTy string) (string, error) {
+	return e.sliceLayout.extract(e, value, llvmTy, sliceFieldLen)
+}
+
+func (e *funcEmitter) extractSliceCapacity(value string, llvmTy string) (string, error) {
+	return e.sliceLayout.extract(e, value, llvmTy, sliceFieldCap)
+}
+
+func (e *funcEmitter) buildSliceValue(parts sliceValueParts) (string, string, error) {
+	return e.sliceLayout.build(e, parts)
+}
+
+func (e *funcEmitter) resolveSliceBound(raw string, fallback string) (string, error) {
+	if raw == "" {
+		return fallback, nil
+	}
+	value, llvmTy, err := e.resolveTyped(valueRef{raw: raw, ty: "i32"}, "i32")
+	if err != nil {
+		return "", err
+	}
+	if llvmTy != "i32" {
+		return "", fmt.Errorf("expected i32 slice bound, got %s", llvmTy)
+	}
+	return value, nil
+}
+
+func (e *funcEmitter) resolveSlice(raw string, hintTy string) (string, string, error) {
+	baseRaw, lowRaw, highRaw, hasBounds, ok := splitMLSESliceExpr(raw)
 	if !ok {
-		value, err := e.materializeZero(mustLLVMType(hintTy))
+		value, err := e.materializeZero(e.llvmType(hintTy))
 		if err != nil {
 			return "", "", err
 		}
-		return value, mustLLVMType(hintTy), nil
+		return value, e.llvmType(hintTy), nil
 	}
-	base, baseTy, err := e.resolveTyped(valueRef{raw: baseRaw, ty: "!go.any"}, "!go.any")
+
+	baseGoTy := e.typeOfValue(baseRaw)
+	resultGoTy := hintTy
+	if resultGoTy == "" || resultGoTy == "!go.any" {
+		resultGoTy = sliceExprResultType(baseGoTy)
+	}
+	if !hasBounds {
+		if isGoSliceType(baseGoTy) || strings.HasPrefix(baseGoTy, "!go.string") {
+			return e.resolveTyped(valueRef{raw: baseRaw, ty: resultGoTy}, resultGoTy)
+		}
+		value, err := e.materializeZero(e.llvmType(resultGoTy))
+		if err != nil {
+			return "", "", err
+		}
+		return value, e.llvmType(resultGoTy), nil
+	}
+	if lowRaw == "" && highRaw == "" {
+		return e.resolveTyped(valueRef{raw: baseRaw, ty: resultGoTy}, resultGoTy)
+	}
+	if strings.HasPrefix(baseGoTy, "!go.string") {
+		return e.resolveTyped(valueRef{raw: baseRaw, ty: resultGoTy}, resultGoTy)
+	}
+	if !isGoSliceType(baseGoTy) {
+		value, err := e.materializeZero(e.llvmType(resultGoTy))
+		if err != nil {
+			return "", "", err
+		}
+		return value, e.llvmType(resultGoTy), nil
+	}
+
+	base, baseLLVMTy, err := e.resolveTyped(valueRef{raw: baseRaw, ty: baseGoTy}, baseGoTy)
 	if err != nil {
 		return "", "", err
+	}
+	if baseLLVMTy != e.sliceLayout.llvmType() {
+		return "", "", fmt.Errorf("expected slice value, got %s", baseLLVMTy)
+	}
+
+	data, err := e.extractSliceData(base, baseLLVMTy)
+	if err != nil {
+		return "", "", err
+	}
+	length, err := e.extractSliceLength(base, baseLLVMTy)
+	if err != nil {
+		return "", "", err
+	}
+	capacity := ""
+	if e.sliceLayout.hasCap() {
+		capacity, err = e.extractSliceCapacity(base, baseLLVMTy)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	zero, err := e.materializeLiteral("0", "i32")
+	if err != nil {
+		return "", "", err
+	}
+
+	low, err := e.resolveSliceBound(lowRaw, zero)
+	if err != nil {
+		value, zeroErr := e.materializeZero(e.llvmType(resultGoTy))
+		if zeroErr != nil {
+			return "", "", err
+		}
+		return value, e.llvmType(resultGoTy), nil
+	}
+	high, err := e.resolveSliceBound(highRaw, length)
+	if err != nil {
+		value, zeroErr := e.materializeZero(e.llvmType(resultGoTy))
+		if zeroErr != nil {
+			return "", "", err
+		}
+		return value, e.llvmType(resultGoTy), nil
+	}
+
+	newData := data
+	if lowRaw != "" {
+		newData = e.freshValue("slice.subdata")
+		e.emitInstruction(fmt.Sprintf("%s = llvm.getelementptr %s[%s] : (!llvm.ptr, i32) -> !llvm.ptr", newData, data, low))
+	}
+
+	newLen := high
+	if lowRaw != "" {
+		newLen = e.freshValue("slice.sublen")
+		e.emitInstruction(fmt.Sprintf("%s = llvm.sub %s, %s : i32", newLen, high, low))
+	}
+
+	newCap := capacity
+	if e.sliceLayout.hasCap() && lowRaw != "" {
+		newCap = e.freshValue("slice.subcap")
+		e.emitInstruction(fmt.Sprintf("%s = llvm.sub %s, %s : i32", newCap, capacity, low))
+	}
+
+	return e.buildSliceValue(sliceValueParts{
+		Data:     newData,
+		Length:   newLen,
+		Capacity: newCap,
+	})
+}
+
+func (e *funcEmitter) resolveIndex(raw string, hintTy string) (string, string, error) {
+	baseRaw, indexRaw, ok := splitMLSEIndexExpr(raw)
+	if !ok {
+		value, err := e.materializeZero(e.llvmType(hintTy))
+		if err != nil {
+			return "", "", err
+		}
+		return value, e.llvmType(hintTy), nil
+	}
+	baseGoTy := e.typeOfValue(baseRaw)
+	if baseGoTy == "" {
+		baseGoTy = "!go.any"
+	}
+	base, baseTy, err := e.resolveTyped(valueRef{raw: baseRaw, ty: baseGoTy}, baseGoTy)
+	if err != nil {
+		return "", "", err
+	}
+	if isGoSliceType(baseGoTy) {
+		base, err = e.extractSliceData(base, baseTy)
+		if err != nil {
+			return "", "", err
+		}
+		baseTy = "!llvm.ptr"
 	}
 	idx, idxTy, err := e.resolveTyped(valueRef{raw: indexRaw, ty: "i32"}, "i32")
 	if err != nil {
 		return "", "", err
 	}
 	if !isPointerLLVMType(baseTy) || !isIntegerLLVMType(idxTy) {
-		value, err := e.materializeZero(mustLLVMType(hintTy))
+		value, err := e.materializeZero(e.llvmType(hintTy))
 		if err != nil {
 			return "", "", err
 		}
-		return value, mustLLVMType(hintTy), nil
+		return value, e.llvmType(hintTy), nil
 	}
-	resultTy := mustLLVMType(hintTy)
+	resultTy := e.llvmType(hintTy)
 	if !isIntegerLLVMType(resultTy) && resultTy != "!llvm.ptr" {
 		value, err := e.materializeZero(resultTy)
 		if err != nil {
@@ -876,7 +1115,7 @@ func (e *funcEmitter) resolveTyped(ref valueRef, hintTy string) (string, string,
 	if ref.raw == "" {
 		return "", "", errors.New("empty value")
 	}
-	llvmTy := mustLLVMType(hintTy)
+	llvmTy := e.llvmType(hintTy)
 	if llvmTy == "void" {
 		llvmTy = "!llvm.ptr"
 	}
@@ -981,8 +1220,9 @@ func (e *funcEmitter) resolveTyped(ref valueRef, hintTy string) (string, string,
 		tmp := e.freshValue("neg")
 		e.emitInstruction(fmt.Sprintf("%s = llvm.sub %s, %s : %s", tmp, zero, value, innerTy))
 		return tmp, innerTy, nil
+	case strings.HasPrefix(ref.raw, "mlse.slice "):
+		return e.resolveSlice(ref.raw, hintTy)
 	case strings.HasPrefix(ref.raw, "mlse.select "),
-		strings.HasPrefix(ref.raw, "mlse.slice "),
 		strings.HasPrefix(ref.raw, "mlse.typeassert "),
 		strings.HasPrefix(ref.raw, "mlse.composite "),
 		strings.HasPrefix(ref.raw, "mlse.kv "),
@@ -1020,6 +1260,12 @@ func (e *funcEmitter) typeOfValue(raw string) string {
 		return "!go.string"
 	case strings.HasPrefix(raw, "mlse.not "):
 		return "i1"
+	case strings.HasPrefix(raw, "mlse.slice "):
+		baseRaw, _, _, _, ok := splitMLSESliceExpr(raw)
+		if !ok {
+			return "!go.any"
+		}
+		return sliceExprResultType(e.typeOfValue(baseRaw))
 	case isIntegerLiteral(raw):
 		return "i32"
 	default:
@@ -1038,7 +1284,7 @@ func (e *funcEmitter) preferredLocalGoType(name string, declared string) string 
 }
 
 func (e *funcEmitter) coercedLocalLLVMType(name string, slot localSlot, hintTy string) (string, bool) {
-	hintLLVM := mustLLVMType(hintTy)
+	hintLLVM := e.llvmType(hintTy)
 	if hintLLVM == "void" || hintLLVM == slot.llvmTy {
 		return "", false
 	}

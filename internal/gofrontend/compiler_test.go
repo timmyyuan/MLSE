@@ -191,6 +191,31 @@ func f(xs []int) []int {
 	}
 }
 
+func TestCompileFileLowersOrdinaryLenCallLikeRangeBuiltin(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "len.go")
+	source := `package demo
+
+func f(xs []int) int {
+	return len(xs)
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got, err := CompileFileGoIRLike(path)
+	if err != nil {
+		t.Fatalf("CompileFile returned error: %v", err)
+	}
+	if !strings.Contains(got, `mlse.call %len(%xs) : i32`) {
+		t.Fatalf("expected len builtin call lowering:\n%s", got)
+	}
+	if strings.Contains(got, `!go.named<"len">`) {
+		t.Fatalf("unexpected len-as-named-type fallback:\n%s", got)
+	}
+}
+
 func TestCompileFileHandlesSingleRhsMultiAssign(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "multi_assign.go")
@@ -299,11 +324,42 @@ func f(xs []int, s string) (int, []int, string) {
 	if !strings.Contains(got, `mlse.index %xs[0] : i32`) {
 		t.Fatalf("expected typed slice index result:\n%s", got)
 	}
-	if !strings.Contains(got, `mlse.slice %xs : !go.slice<i32>`) {
+	if !strings.Contains(got, `mlse.slice %xs[1:] : !go.slice<i32>`) {
 		t.Fatalf("expected typed slice expression:\n%s", got)
 	}
-	if !strings.Contains(got, `mlse.slice %s : !go.string`) {
+	if !strings.Contains(got, `mlse.slice %s[1:] : !go.string`) {
 		t.Fatalf("expected typed string slice expression:\n%s", got)
+	}
+}
+
+func TestCompileFileEncodesSliceBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "slice_bounds.go")
+	source := `package demo
+
+func f(xs []int, i int, j int) ([]int, []int, []int) {
+	a := xs[:j]
+	b := xs[i:]
+	c := xs[i:j]
+	return a, b, c
+}
+`
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got, err := CompileFileGoIRLike(path)
+	if err != nil {
+		t.Fatalf("CompileFile returned error: %v", err)
+	}
+	if !strings.Contains(got, `mlse.slice %xs[:%j] : !go.slice<i32>`) {
+		t.Fatalf("expected upper-bound slice encoding:\n%s", got)
+	}
+	if !strings.Contains(got, `mlse.slice %xs[%i:] : !go.slice<i32>`) {
+		t.Fatalf("expected lower-bound slice encoding:\n%s", got)
+	}
+	if !strings.Contains(got, `mlse.slice %xs[%i:%j] : !go.slice<i32>`) {
+		t.Fatalf("expected bounded slice encoding:\n%s", got)
 	}
 }
 

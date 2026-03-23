@@ -1,0 +1,64 @@
+125	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/etcdutl/ctl.go	../../../tidy-v359-20260320/gomodcache/go.etcd.io/bbolt@v1.3.7/bolt_unix.go:12:2: module lookup disabled by GOPROXY=off
+55	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/etcdctl/main.go	../../../tidy-v359-20260320/gomodcache/github.com/olekukonko/tablewriter@v0.0.5/util.go:15:2: module lookup disabled by GOPROXY=off
+53	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v3/auth.go	logger.go:24:2: module lookup disabled by GOPROXY=off
+32	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/apply.go	mvcc/index.go:21:2: module lookup disabled by GOPROXY=off
+30	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tests/functional/cmd/etcd-tester/main.go	functional/tester/metrics_report.go:21:2: module lookup disabled by GOPROXY=off
+27	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/pkg/fileutil/dir_unix.go	fileutil/preallocate_darwin.go:24:2: module lookup disabled by GOPROXY=off
+27	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/main.go	../../../tidy-v359-20260320/gomodcache/github.com/tmc/grpc-websocket-proxy@v0.0.0-20201229170055-e5319fda7802/wsproxy/websocket_proxy.go:12:2: module lookup disabled by GOPROXY=off
+21	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/raft/bootstrap.go	raftpb/raft.pb.go:13:2: module lookup disabled by GOPROXY=off
+18	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/raft/rafttest/doc.go	rafttest/interaction_env_handler.go:22:2: module lookup disabled by GOPROXY=off
+16	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/rafthttp/coder.go	etcdserver/api/rafthttp/stream.go:35:2: module lookup disabled by GOPROXY=off
+15	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tools/benchmark/doc.go	tools/benchmark/cmd/put.go:32:2: module lookup disabled by GOPROXY=off
+14	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v2store/doc.go	etcdserver/api/v2store/node.go:24:2: module lookup disabled by GOPROXY=off
+12	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v2/auth_role.go	json.go:22:2: module lookup disabled by GOPROXY=off
+10	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/proxy/grpcproxy/adapter/auth_client_adapter.go	proxy/grpcproxy/adapter/chan_stream.go:22:2: module lookup disabled by GOPROXY=off
+9	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tests/functional/cmd/etcd-runner/main.go	functional/runner/global.go:27:2: module lookup disabled by GOPROXY=off
+8	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/flags/flag.go	flags/flag.go:25:2: module lookup disabled by GOPROXY=off
+8	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/wal/decoder.go	wal/metrics.go:17:8: module lookup disabled by GOPROXY=off
+7	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/pkg/testutil/assert.go	testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)
+6	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v3election/doc.go	../client/v3/logger.go:24:2: module lookup disabled by GOPROXY=off
+6	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/contrib/raftexample/doc.go	server/etcdserver/api/rafthttp/stream.go:35:2: module lookup disabled by GOPROXY=off
+5	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/snap/db.go	etcdserver/api/snap/metrics.go:17:8: module lookup disabled by GOPROXY=off
+5	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/proxy/httpproxy/director.go	proxy/httpproxy/proxy.go:24:2: module lookup disabled by GOPROXY=off
+5	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tools/etcd-dump-metrics/etcd.go	../../tidy-v359-20260320/gomodcache/github.com/tmc/grpc-websocket-proxy@v0.0.0-20201229170055-e5319fda7802/wsproxy/websocket_proxy.go:12:2: module lookup disabled by GOPROXY=off
+4	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/api/etcdserverpb/etcdserver.pb.go	etcdserverpb/rpc.pb.go:20:2: module lookup disabled by GOPROXY=off
+4	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/api/v3rpc/rpctypes/doc.go	v3rpc/rpctypes/error.go:19:2: module lookup disabled by GOPROXY=off
+4	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/pkg/logutil/doc.go	logutil/zap_journal.go:30:2: module lookup disabled by GOPROXY=off
+4	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/pkg/tlsutil/cipher_suites.go	tlsutil/tlsutil.go:65:19: undefined: tls.X509KeyPair
+4	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/ioutil/pagewriter.go	../client/pkg/fileutil/preallocate_darwin.go:24:2: module lookup disabled by GOPROXY=off
+4	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v2stats/leader.go	etcdserver/api/v2stats/leader.go:23:2: module lookup disabled by GOPROXY=off
+4	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tools/etcd-dump-db/backend.go	../../tidy-v359-20260320/gomodcache/go.etcd.io/bbolt@v1.3.7/bolt_unix.go:12:2: module lookup disabled by GOPROXY=off
+3	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/api/etcdserverpb/gw/rpc.pb.gw.go	../../../tidy-v359-20260320/gomodcache/github.com/grpc-ecosystem/grpc-gateway@v1.16.0/runtime/proto_errors.go:8:2: module lookup disabled by GOPROXY=off
+3	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/netutil/doc.go	netutil/netutil.go:28:2: module lookup disabled by GOPROXY=off
+3	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/osutil/interrupt_unix.go	osutil/interrupt_unix.go:26:2: module lookup disabled by GOPROXY=off
+3	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tests/functional/rpcpb/etcd_config.go	functional/rpcpb/rpc.pb.go:11:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v3/mock/mockserver/doc.go	mock/mockserver/mockserver.go:28:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v3/snapshot/doc.go	snapshot/v3_snapshot.go:25:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/debugutil/doc.go	debugutil/pprof.go:19:2: github.com/creack/pty@v1.1.11: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/grpc_testing/recorder.go	grpc_testing/stub_server.go:9:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/proxy/doc.go	proxy/server.go:32:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v3client/doc.go	../../../tidy-v359-20260320/gomodcache/github.com/grpc-ecosystem/go-grpc-prometheus@v1.2.0/client_metrics.go:7:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/mock/mockstorage/doc.go	../raft/raftpb/raft.pb.go:13:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/mock/mockwait/doc.go	../client/pkg/testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/proxy/tcpproxy/doc.go	proxy/tcpproxy/userspace.go:25:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/wal/walpb/record.go	wal/walpb/record.pb.go:13:2: module lookup disabled by GOPROXY=off
+2	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tools/etcd-dump-logs/doc.go	server/etcdserver/api/snap/metrics.go:17:8: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/api/authpb/auth.pb.go	authpb/auth.pb.go:13:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/api/membershippb/membership.pb.go	membershippb/membership.pb.go:13:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/api/mvccpb/kv.pb.go	mvccpb/kv.pb.go:13:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/api/version/version.go	version/version.go:23:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/pkg/srv/srv.go	srv/srv.go:101:18: undefined: net.SRV
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v3/credentials/credentials.go	credentials/credentials.go:26:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v3/internal/resolver/resolver.go	internal/resolver/resolver.go:21:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v3/naming/endpoints/internal/update.go	.tinygo-probe-stubs/go.etcd.io__etcd__client__v3__naming__endpoints__internal/main.go:2:8: use of internal package go.etcd.io/etcd/client/v3/naming/endpoints/internal not allowed
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v3/yaml/config.go	yaml/config.go:23:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/expect/expect.go	expect/expect.go:30:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/traceutil/trace.go	traceutil/trace.go:25:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/snap/snappb/snap.pb.go	etcdserver/api/snap/snappb/snap.pb.go:13:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v2discovery/discovery.go	etcdserver/api/v2discovery/discovery.go:36:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v3election/v3electionpb/v3election.pb.go	etcdserver/api/v3election/v3electionpb/v3election.pb.go:14:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v3lock/v3lockpb/v3lock.pb.go	etcdserver/api/v3lock/v3lockpb/v3lock.pb.go:14:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/lease/leasepb/lease.pb.go	lease/leasepb/lease.pb.go:13:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/proxy/grpcproxy/cache/store.go	../api/etcdserverpb/rpc.pb.go:20:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tests/functional/cmd/etcd-proxy/main.go	../pkg/proxy/server.go:32:2: module lookup disabled by GOPROXY=off
+1	tmp/etcd-targets/helper-smoke-v359-tidied-20260320/contrib/lock/client/client.go	client/v3/logger.go:24:2: module lookup disabled by GOPROXY=off

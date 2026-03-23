@@ -1,0 +1,67 @@
+{
+  "desired_target": {
+    "ref": "v3.5.25",
+    "year": 2025,
+    "why": "last-year etcd stable release in the 3.5 line; upstream release planning and go.mod indicate Go 1.24.x tooling instead of main branch Go 1.26",
+    "materialization_status": "not available in this offline machine state; local full clone only contains tags up to v3.5.9"
+  },
+  "actual_exercised_target": {
+    "ref": "v3.5.9",
+    "resolved_commit": "bdbbde998b7ed434b23676530d10dbd601c4a7c0",
+    "repo_dir": "tmp/etcd-targets/helper-smoke-v359",
+    "go": "1.19",
+    "toolchain": null,
+    "why": "closest locally available release tag in the same 3.5 stable line, exported reproducibly with scripts/prepare-etcd-probe-target.sh"
+  },
+  "baseline_main_probe": {
+    "package_probe": {
+      "packages_total": 13,
+      "packages_success": 0,
+      "top_failure_reason": "requires go version 1.19 through 1.25, got go1.26"
+    },
+    "file_probe": {
+      "total_go_files": 1084,
+      "successful_go_files": 14,
+      "top_failure_reason": "<path> +0x2fe4",
+      "methodology": "standalone-file build of every .go file, including tests and non-main packages"
+    }
+  },
+  "rerun_v359_probe": {
+    "package_probe": {
+      "packages_total": 145,
+      "packages_success": 26,
+      "package_success_rate": 0.1793103448275862,
+      "success_examples": [
+        "go.etcd.io/etcd/client/pkg/v3/pathutil",
+        "go.etcd.io/etcd/client/pkg/v3/systemd",
+        "go.etcd.io/etcd/client/pkg/v3/types",
+        "go.etcd.io/etcd/client/v3/internal/endpoint",
+        "go.etcd.io/etcd/client/v3/naming",
+        "go.etcd.io/etcd/pkg/v3/adt",
+        "go.etcd.io/etcd/pkg/v3/contention",
+        "go.etcd.io/etcd/pkg/v3/cpuutil",
+        "go.etcd.io/etcd/pkg/v3/crc",
+        "go.etcd.io/etcd/pkg/v3/httputil"
+      ],
+      "top_failure_reason": "logger.go:24:2: module lookup disabled by GOPROXY=off"
+    },
+    "file_probe": {
+      "covered_go_files": 644,
+      "successful_go_files": 47,
+      "covered_success_rate": 0.07298136645962733,
+      "omitted_test_go_files": 314,
+      "top_failure_reason": "../server/mvcc/index.go:21:2: module lookup disabled by GOPROXY=off",
+      "methodology": "package-context attribution with library-package stubs; test files omitted instead of forced-failed"
+    }
+  },
+  "improvements": [
+    "The hard main-branch blocker changed from \"requires go version 1.19 through 1.25, got go1.26\" to actual package/dependency-level outcomes on an older release line.",
+    "Package probe moved from 0 successful packages on main to 26 successful packages on the older release-line rerun.",
+    "File probe moved from 14 raw standalone-file successes on main to 47 package-context-attributed non-test file successes, with 314 test files separated out instead of being mixed into failures."
+  ],
+  "remaining_limitations": [
+    "This machine is offline for module resolution; many remaining failures are now \"module lookup disabled by GOPROXY=off\", which is an environment limit rather than a TinyGo semantic failure.",
+    "The exact 2025 target v3.5.25 is identified but not materialized locally, so the exercised rerun uses v3.5.9 from the same stable line as an offline fallback.",
+    "The new file probe is intentionally not comparable 1:1 with the old standalone-file probe because it corrects a major methodology distortion."
+  ]
+}

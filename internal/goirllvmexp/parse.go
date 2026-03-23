@@ -212,8 +212,14 @@ func parseInstruction(lines []sourceLine, start int) (instruction, int, error) {
 	case strings.HasPrefix(line.text, "mlse.expr "):
 		inst, err := parseExpr(line)
 		return inst, start + 1, err
+	case strings.HasPrefix(line.text, "mlse.label "):
+		inst, err := parseLabel(line)
+		return inst, start + 1, err
 	case strings.HasPrefix(line.text, "mlse.branch "):
 		inst, err := parseBranch(line)
+		return inst, start + 1, err
+	case strings.HasPrefix(line.text, "mlse.++ "), strings.HasPrefix(line.text, "mlse.-- "):
+		inst, err := parseIncDec(line)
 		return inst, start + 1, err
 	case strings.HasPrefix(line.text, "mlse.if "):
 		return parseIf(lines, start)
@@ -393,26 +399,65 @@ func parseConditionHeader(line sourceLine, prefix string) (condition, error) {
 
 func parseExpr(line sourceLine) (instruction, error) {
 	rest := strings.TrimPrefix(line.text, "mlse.expr ")
-	pieces := strings.SplitN(rest, " : ", 2)
-	if len(pieces) != 2 {
+	head, ty, err := splitTrailingType(rest)
+	if err != nil {
 		return nil, fmt.Errorf("line %d: malformed expr %q", line.number, line.text)
 	}
 	return &exprInst{
 		line: line.number,
 		ref: valueRef{
-			raw: strings.TrimSpace(pieces[0]),
-			ty:  strings.TrimSpace(pieces[1]),
+			raw: head,
+			ty:  ty,
 		},
 	}, nil
 }
 
+func parseLabel(line sourceLine) (instruction, error) {
+	label := strings.TrimSpace(strings.TrimPrefix(line.text, "mlse.label "))
+	if !strings.HasPrefix(label, "@") || len(label) == 1 {
+		return nil, fmt.Errorf("line %d: malformed label %q", line.number, line.text)
+	}
+	return &labelInst{line: line.number, label: sanitizeSymbol(strings.TrimPrefix(label, "@"))}, nil
+}
+
 func parseBranch(line sourceLine) (instruction, error) {
 	rest := strings.TrimSpace(strings.TrimPrefix(line.text, "mlse.branch "))
-	kind, err := strconv.Unquote(rest)
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("line %d: malformed branch %q", line.number, line.text)
+	}
+	kind, err := strconv.Unquote(fields[0])
 	if err != nil {
 		return nil, fmt.Errorf("line %d: malformed branch %q", line.number, line.text)
 	}
-	return &branchInst{line: line.number, kind: kind}, nil
+	inst := &branchInst{line: line.number, kind: kind}
+	if len(fields) > 1 {
+		if !strings.HasPrefix(fields[1], "@") || len(fields[1]) == 1 {
+			return nil, fmt.Errorf("line %d: malformed branch %q", line.number, line.text)
+		}
+		inst.label = sanitizeSymbol(strings.TrimPrefix(fields[1], "@"))
+	}
+	return inst, nil
+}
+
+func parseIncDec(line sourceLine) (instruction, error) {
+	op := "mlse.++"
+	if strings.HasPrefix(line.text, "mlse.-- ") {
+		op = "mlse.--"
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line.text, op))
+	target, ty, err := splitTrailingType(rest)
+	if err != nil {
+		return nil, fmt.Errorf("line %d: malformed %s %q", line.number, op, line.text)
+	}
+	return &incDecInst{
+		line: line.number,
+		op:   op,
+		target: valueRef{
+			raw: target,
+			ty:  ty,
+		},
+	}, nil
 }
 
 func parseStore(line sourceLine) (instruction, error) {
@@ -427,8 +472,8 @@ func parseStore(line sourceLine) (instruction, error) {
 	if len(assign) != 2 {
 		return nil, fmt.Errorf("line %d: malformed store %q", line.number, line.text)
 	}
-	valuePieces := strings.SplitN(assign[1], " : ", 2)
-	if len(valuePieces) != 2 {
+	valueHead, valueTy, err := splitTrailingType(assign[1])
+	if err != nil {
 		return nil, fmt.Errorf("line %d: malformed store %q", line.number, line.text)
 	}
 	return &storeInst{
@@ -439,8 +484,8 @@ func parseStore(line sourceLine) (instruction, error) {
 			ty:  "!go.any",
 		},
 		value: valueRef{
-			raw: strings.TrimSpace(valuePieces[0]),
-			ty:  strings.TrimSpace(valuePieces[1]),
+			raw: valueHead,
+			ty:  valueTy,
 		},
 	}, nil
 }
@@ -468,15 +513,15 @@ func parseCompareCondition(lineNo int, head string, ty string) (condition, error
 
 func parseReturn(line sourceLine) (instruction, error) {
 	rest := strings.TrimPrefix(line.text, "return ")
-	pieces := strings.SplitN(rest, " : ", 2)
-	if len(pieces) != 2 {
+	valueText, typeText, err := splitTrailingType(rest)
+	if err != nil {
 		return nil, fmt.Errorf("line %d: malformed return %q", line.number, line.text)
 	}
-	values, err := splitTopLevel(strings.TrimSpace(pieces[0]))
+	values, err := splitTopLevel(valueText)
 	if err != nil {
 		return nil, fmt.Errorf("line %d: %v", line.number, err)
 	}
-	types, err := splitTopLevel(strings.TrimSpace(pieces[1]))
+	types, err := splitTopLevel(typeText)
 	if err != nil {
 		return nil, fmt.Errorf("line %d: %v", line.number, err)
 	}
@@ -500,30 +545,33 @@ func parseAssignment(line sourceLine) (instruction, error) {
 		return parseBinary(line.number, dest, rest)
 	case strings.HasPrefix(rest, "mlse.call "):
 		return parseCall(line.number, dest, rest)
+	case rest == "mlse.funclit":
+		return &aliasInst{
+			line: line.number,
+			dest: typedValue{name: dest, ty: "!go.func"},
+			src:  valueRef{raw: "mlse.funclit", ty: "!go.func"},
+		}, nil
 	case strings.HasPrefix(rest, "mlse.zero : "):
 		ty := strings.TrimSpace(strings.TrimPrefix(rest, "mlse.zero : "))
 		return &aliasInst{line: line.number, dest: typedValue{name: dest, ty: ty}, src: zeroValue(ty)}, nil
 	default:
-		valuePieces := strings.SplitN(rest, " : ", 2)
-		if len(valuePieces) != 2 {
+		valueHead, ty, err := splitTrailingType(rest)
+		if err != nil {
 			return nil, fmt.Errorf("line %d: unsupported assignment %q", line.number, line.text)
 		}
-		ty := strings.TrimSpace(valuePieces[1])
 		return &aliasInst{
 			line: line.number,
 			dest: typedValue{name: dest, ty: ty},
-			src:  valueRef{raw: strings.TrimSpace(valuePieces[0]), ty: ty},
+			src:  valueRef{raw: valueHead, ty: ty},
 		}, nil
 	}
 }
 
 func parseBinary(lineNo int, dest, rest string) (instruction, error) {
-	pieces := strings.SplitN(rest, " : ", 2)
-	if len(pieces) != 2 {
+	head, ty, err := splitTrailingType(rest)
+	if err != nil {
 		return nil, fmt.Errorf("line %d: malformed arithmetic instruction %q", lineNo, rest)
 	}
-	head := pieces[0]
-	ty := strings.TrimSpace(pieces[1])
 	firstSpace := strings.IndexByte(head, ' ')
 	if firstSpace < 0 {
 		return nil, fmt.Errorf("line %d: malformed arithmetic instruction %q", lineNo, rest)
@@ -546,12 +594,12 @@ func parseBinary(lineNo int, dest, rest string) (instruction, error) {
 }
 
 func parseCall(lineNo int, dest, rest string) (instruction, error) {
-	pieces := strings.SplitN(rest, " : ", 2)
-	if len(pieces) != 2 {
+	headWithCall, ty, err := splitTrailingType(rest)
+	if err != nil {
 		return nil, fmt.Errorf("line %d: malformed call instruction %q", lineNo, rest)
 	}
 
-	head := strings.TrimPrefix(pieces[0], "mlse.call ")
+	head := strings.TrimPrefix(headWithCall, "mlse.call ")
 	open := strings.IndexByte(head, '(')
 	close := strings.LastIndexByte(head, ')')
 	if open <= 0 || close < open {
@@ -574,7 +622,7 @@ func parseCall(lineNo int, dest, rest string) (instruction, error) {
 
 	return &callInst{
 		line:   lineNo,
-		dest:   typedValue{name: dest, ty: strings.TrimSpace(pieces[1])},
+		dest:   typedValue{name: dest, ty: ty},
 		callee: callee,
 		args:   args,
 	}, nil

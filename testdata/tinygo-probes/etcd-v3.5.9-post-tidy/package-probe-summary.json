@@ -1,0 +1,136 @@
+{
+  "probe_mode": "package-or-stub",
+  "repo_dir": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320",
+  "target_metadata": {
+    "repo": "etcd",
+    "requested_ref": "v3.5.9",
+    "resolved_commit": "bdbbde998b7ed434b23676530d10dbd601c4a7c0",
+    "source_repo": "~/work/syncrange-tests/etcd",
+    "target_dir": "tmp/etcd-targets/helper-smoke-v359",
+    "go": "1.19",
+    "toolchain": null
+  },
+  "tinygo_version": "tinygo version 0.40.1 darwin/arm64 (using go version go1.25.8 and LLVM version 20.1.1)",
+  "modules_total": 12,
+  "packages_total": 145,
+  "main_packages_total": 15,
+  "library_packages_total": 130,
+  "skipped_packages": 11,
+  "packages_success": 27,
+  "packages_fail": 118,
+  "package_success_rate": 0.18620689655172415,
+  "go_files_in_successful_packages": 49,
+  "success_list": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/package-probe-success.txt",
+  "fail_list": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/package-probe-fail.txt",
+  "results_jsonl": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/package-probe-results.jsonl",
+  "failure_reasons": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/package-probe-failure-reasons.txt",
+  "top_failure_reasons": [
+    {
+      "reason": "../../../tidy-v359-20260320/gomodcache/go.etcd.io/bbolt@v1.3.7/bolt_unix.go:12:2: module lookup disabled by GOPROXY=off",
+      "count": 22,
+      "example": "go.etcd.io/etcd/etcdutl/v3"
+    },
+    {
+      "reason": "logger.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 10,
+      "example": "go.etcd.io/etcd/client/v3"
+    },
+    {
+      "reason": "../../../tidy-v359-20260320/gomodcache/github.com/tmc/grpc-websocket-proxy@v0.0.0-20201229170055-e5319fda7802/wsproxy/websocket_proxy.go:12:2: module lookup disabled by GOPROXY=off",
+      "count": 6,
+      "example": "go.etcd.io/etcd/server/v3"
+    },
+    {
+      "reason": "../../../tidy-v359-20260320/gomodcache/github.com/olekukonko/tablewriter@v0.0.5/util.go:15:2: module lookup disabled by GOPROXY=off",
+      "count": 5,
+      "example": "go.etcd.io/etcd/etcdctl/v3"
+    },
+    {
+      "reason": "raftpb/raft.pb.go:13:2: module lookup disabled by GOPROXY=off",
+      "count": 4,
+      "example": "go.etcd.io/etcd/raft/v3"
+    },
+    {
+      "reason": "mvcc/index.go:21:2: module lookup disabled by GOPROXY=off",
+      "count": 4,
+      "example": "go.etcd.io/etcd/server/v3/etcdserver"
+    },
+    {
+      "reason": "../../../tidy-v359-20260320/gomodcache/github.com/grpc-ecosystem/grpc-gateway@v1.16.0/runtime/proto_errors.go:8:2: module lookup disabled by GOPROXY=off",
+      "count": 3,
+      "example": "go.etcd.io/etcd/api/v3/etcdserverpb/gw"
+    },
+    {
+      "reason": "../client/v3/logger.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 3,
+      "example": "go.etcd.io/etcd/server/v3/etcdserver/api/v3election"
+    },
+    {
+      "reason": "fileutil/preallocate_darwin.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 2,
+      "example": "go.etcd.io/etcd/client/pkg/v3/fileutil"
+    },
+    {
+      "reason": "etcdserver/api/v2store/node.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 2,
+      "example": "go.etcd.io/etcd/server/v3/etcdserver/api/v2store"
+    },
+    {
+      "reason": "functional/runner/global.go:27:2: module lookup disabled by GOPROXY=off",
+      "count": 2,
+      "example": "go.etcd.io/etcd/tests/v3/functional/cmd/etcd-runner"
+    },
+    {
+      "reason": "functional/tester/metrics_report.go:21:2: module lookup disabled by GOPROXY=off",
+      "count": 2,
+      "example": "go.etcd.io/etcd/tests/v3/functional/cmd/etcd-tester"
+    },
+    {
+      "reason": "tools/benchmark/cmd/put.go:32:2: module lookup disabled by GOPROXY=off",
+      "count": 2,
+      "example": "go.etcd.io/etcd/v3/tools/benchmark"
+    },
+    {
+      "reason": "authpb/auth.pb.go:13:2: module lookup disabled by GOPROXY=off",
+      "count": 1,
+      "example": "go.etcd.io/etcd/api/v3/authpb"
+    },
+    {
+      "reason": "etcdserverpb/rpc.pb.go:20:2: module lookup disabled by GOPROXY=off",
+      "count": 1,
+      "example": "go.etcd.io/etcd/api/v3/etcdserverpb"
+    },
+    {
+      "reason": "membershippb/membership.pb.go:13:2: module lookup disabled by GOPROXY=off",
+      "count": 1,
+      "example": "go.etcd.io/etcd/api/v3/membershippb"
+    },
+    {
+      "reason": "mvccpb/kv.pb.go:13:2: module lookup disabled by GOPROXY=off",
+      "count": 1,
+      "example": "go.etcd.io/etcd/api/v3/mvccpb"
+    },
+    {
+      "reason": "v3rpc/rpctypes/error.go:19:2: module lookup disabled by GOPROXY=off",
+      "count": 1,
+      "example": "go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+    },
+    {
+      "reason": "version/version.go:23:2: module lookup disabled by GOPROXY=off",
+      "count": 1,
+      "example": "go.etcd.io/etcd/api/v3/version"
+    },
+    {
+      "reason": "logutil/zap_journal.go:30:2: module lookup disabled by GOPROXY=off",
+      "count": 1,
+      "example": "go.etcd.io/etcd/client/pkg/v3/logutil"
+    }
+  ],
+  "methodology_notes": [
+    "Library packages are compiled through generated blank-import stubs because TinyGo build expects a main package as the build entrypoint.",
+    "Package discovery walks every go.mod under the etcd tree instead of only the root module.",
+    "Builds run with HOME/GOCACHE/GOMODCACHE inside the repo workspace; GOPROXY is forced off so missing modules are reported as offline environment limits."
+  ],
+  "snapshot_dir": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy",
+  "warmup_summary": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/module-warmup-summary.tsv"
+}

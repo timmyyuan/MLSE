@@ -209,7 +209,7 @@ func emitRangeStmt(s *ast.RangeStmt, env *env) string {
 	idx := env.temp("range_idx")
 	limit := env.temp("range_len")
 	buf.WriteString(fmt.Sprintf("    %s = 0 : i32\n", idx))
-	buf.WriteString(fmt.Sprintf("    %s = mlse.call %%len(%s) : i32\n", limit, value))
+	buf.WriteString(formatBuiltinCall(limit, "len", []string{value}, "i32"))
 	buf.WriteString(fmt.Sprintf("    mlse.for arith.cmpi_lt %s, %s : i32 {\n", idx, limit))
 	if name, ok := rangeBindingName(s.Key); ok {
 		keySSA := env.defineTyped(name, rangeKeyType(ty))

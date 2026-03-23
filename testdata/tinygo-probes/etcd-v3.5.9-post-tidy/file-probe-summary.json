@@ -1,0 +1,135 @@
+{
+  "probe_mode": "package-context-file-attribution",
+  "repo_dir": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320",
+  "target_metadata": {
+    "repo": "etcd",
+    "requested_ref": "v3.5.9",
+    "resolved_commit": "bdbbde998b7ed434b23676530d10dbd601c4a7c0",
+    "source_repo": "~/work/syncrange-tests/etcd",
+    "target_dir": "tmp/etcd-targets/helper-smoke-v359",
+    "go": "1.19",
+    "toolchain": null
+  },
+  "tinygo_version": "tinygo version 0.40.1 darwin/arm64 (using go version go1.25.8 and LLVM version 20.1.1)",
+  "modules_total": 12,
+  "package_contexts_total": 145,
+  "covered_go_files": 644,
+  "successful_go_files": 49,
+  "failed_go_files": 595,
+  "covered_success_rate": 0.07608695652173914,
+  "omitted_test_go_files": 314,
+  "success_list": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/file-probe-success.txt",
+  "fail_list": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/file-probe-fail.txt",
+  "omitted_list": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/file-probe-omitted-test-files.txt",
+  "results_jsonl": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/file-probe-results.jsonl",
+  "failure_reasons": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/file-probe-failure-reasons.txt",
+  "top_failure_reasons": [
+    {
+      "reason": "../../../tidy-v359-20260320/gomodcache/go.etcd.io/bbolt@v1.3.7/bolt_unix.go:12:2: module lookup disabled by GOPROXY=off",
+      "count": 125,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/etcdutl/ctl.go"
+    },
+    {
+      "reason": "../../../tidy-v359-20260320/gomodcache/github.com/olekukonko/tablewriter@v0.0.5/util.go:15:2: module lookup disabled by GOPROXY=off",
+      "count": 55,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/etcdctl/main.go"
+    },
+    {
+      "reason": "logger.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 53,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v3/auth.go"
+    },
+    {
+      "reason": "mvcc/index.go:21:2: module lookup disabled by GOPROXY=off",
+      "count": 32,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/apply.go"
+    },
+    {
+      "reason": "functional/tester/metrics_report.go:21:2: module lookup disabled by GOPROXY=off",
+      "count": 30,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tests/functional/cmd/etcd-tester/main.go"
+    },
+    {
+      "reason": "fileutil/preallocate_darwin.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 27,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/pkg/fileutil/dir_unix.go"
+    },
+    {
+      "reason": "../../../tidy-v359-20260320/gomodcache/github.com/tmc/grpc-websocket-proxy@v0.0.0-20201229170055-e5319fda7802/wsproxy/websocket_proxy.go:12:2: module lookup disabled by GOPROXY=off",
+      "count": 27,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/main.go"
+    },
+    {
+      "reason": "raftpb/raft.pb.go:13:2: module lookup disabled by GOPROXY=off",
+      "count": 21,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/raft/bootstrap.go"
+    },
+    {
+      "reason": "rafttest/interaction_env_handler.go:22:2: module lookup disabled by GOPROXY=off",
+      "count": 18,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/raft/rafttest/doc.go"
+    },
+    {
+      "reason": "etcdserver/api/rafthttp/stream.go:35:2: module lookup disabled by GOPROXY=off",
+      "count": 16,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/rafthttp/coder.go"
+    },
+    {
+      "reason": "tools/benchmark/cmd/put.go:32:2: module lookup disabled by GOPROXY=off",
+      "count": 15,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tools/benchmark/doc.go"
+    },
+    {
+      "reason": "etcdserver/api/v2store/node.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 14,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v2store/doc.go"
+    },
+    {
+      "reason": "json.go:22:2: module lookup disabled by GOPROXY=off",
+      "count": 12,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/v2/auth_role.go"
+    },
+    {
+      "reason": "proxy/grpcproxy/adapter/chan_stream.go:22:2: module lookup disabled by GOPROXY=off",
+      "count": 10,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/proxy/grpcproxy/adapter/auth_client_adapter.go"
+    },
+    {
+      "reason": "functional/runner/global.go:27:2: module lookup disabled by GOPROXY=off",
+      "count": 9,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/tests/functional/cmd/etcd-runner/main.go"
+    },
+    {
+      "reason": "flags/flag.go:25:2: module lookup disabled by GOPROXY=off",
+      "count": 8,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/pkg/flags/flag.go"
+    },
+    {
+      "reason": "wal/metrics.go:17:8: module lookup disabled by GOPROXY=off",
+      "count": 8,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/wal/decoder.go"
+    },
+    {
+      "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+      "count": 7,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/client/pkg/testutil/assert.go"
+    },
+    {
+      "reason": "../client/v3/logger.go:24:2: module lookup disabled by GOPROXY=off",
+      "count": 6,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/server/etcdserver/api/v3election/doc.go"
+    },
+    {
+      "reason": "server/etcdserver/api/rafthttp/stream.go:35:2: module lookup disabled by GOPROXY=off",
+      "count": 6,
+      "example": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320/contrib/raftexample/doc.go"
+    }
+  ],
+  "methodology_notes": [
+    "Each non-test Go file inherits the build result of its package context instead of being compiled as a standalone source file.",
+    "Library packages are compiled through generated blank-import stubs so TinyGo can analyze them without forcing package main.",
+    "Test files are reported separately as omitted because the current probe does not run tinygo test."
+  ],
+  "snapshot_dir": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy",
+  "warmup_summary": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/module-warmup-summary.tsv"
+}

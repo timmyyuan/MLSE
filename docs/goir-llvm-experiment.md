@@ -30,7 +30,13 @@ CLI 默认仍输出 LLVM IR，但现在额外支持：
 
 ```bash
 go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect <input.goir>
+go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect -slice-model=cap <input.goir>
 ```
+
+其中 `-slice-model=min|cap` 的当前语义为：
+
+- `min`：默认最小 slice 表示 `{data,len}`
+- `cap`：实验性 slice 表示 `{data,len,cap}`，并启用 `cap(xs)` lowering 与更真实的 sub-slice capacity 计算
 
 ## 新增内容
 
@@ -56,11 +62,13 @@ go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect <input.goir>
 - `mlse.switch`，tag 只接受 `i1/i32/i64`，`case` 只接受单个字面量值，可带 `default`
 - `mlse.call`
 - `mlse.nil`
+- `len(slice)`，以及在 `-slice-model=cap` 下的 `cap(slice)`
 - 前端把简单 `range` 先降成 `len + index + mlse.for`
 - `break` / `continue`
 - `mlse.expr`
 - `mlse.store_select` / `mlse.store_index` / `mlse.store_deref`
 - `mlse.select` / `mlse.index` / `mlse.load` / `mlse.composite` / 字符串字面量的 **opaque fallback** lowering
+- `mlse.slice` 的 pass-through 与 `a[i:]` / `a[:j]` / `a[i:j]` 子切片；在 `cap` 模式下会额外携带并更新 runtime `cap`
 - 同名 external call 在不同签名下的 symbol 自动拆分
 
 明确不支持：

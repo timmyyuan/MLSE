@@ -17,7 +17,8 @@ MLSE 当前还处于早期原型阶段。
 统一入口位于 `scripts/`：
 
 - `scripts/build.sh`：构建当前 Go MVP 工具
-- `scripts/test.sh`：运行仓库 Go 测试
+- `scripts/build-mlir.sh`：配置并构建 `mlse-opt` 的最小 MLIR/LLVM 工程链路
+- `scripts/test.sh`：运行仓库主线 Go 测试
 - `scripts/fmt.sh`：格式化仓库 Go 代码
 - `scripts/lint.sh`：运行 `go vet`
 - `scripts/clean.sh`：清理仓库内临时产物和 tinygo 实验目录
@@ -39,6 +40,40 @@ artifacts/bin/mlse-go
 
 ```bash
 scripts/test.sh
+```
+
+默认测试现在只覆盖仓库主线 Go 包：
+
+- `./cmd/...`
+- `./internal/...`
+
+这样可以避免把 `tmp/` 下的 TinyGo 安装树、probe 目标和其它实验缓存错误地纳入 `go test ./...`。
+
+### 构建最小 MLIR 工程
+
+```bash
+scripts/build-mlir.sh
+```
+
+当前脚本默认面向本机已验证过的一套 Homebrew LLVM/MLIR 安装：
+
+- `LLVM_PREFIX=/opt/homebrew/Cellar/llvm@20/20.1.8`
+- `MLIR_DIR=$LLVM_PREFIX/lib/cmake/mlir`
+- `LLVM_DIR=$LLVM_PREFIX/lib/cmake/llvm`
+- `CMAKE_C_COMPILER=$LLVM_PREFIX/bin/clang`
+- `CMAKE_CXX_COMPILER=$LLVM_PREFIX/bin/clang++`
+
+如果你的 LLVM 安装路径不同，可以覆盖这些环境变量，例如：
+
+```bash
+LLVM_PREFIX=$(brew --prefix llvm)
+scripts/build-mlir.sh
+```
+
+成功后产物默认位于：
+
+```text
+tmp/cmake-mlir-build/tools/mlse-opt/mlse-opt
 ```
 
 ### 运行 Go 前端 MVP
@@ -135,6 +170,11 @@ scripts/tinygo-probe-local.sh
 
 因为 `cmd/mlse-go` 默认已经切到正式 `go` dialect 输出。
 
+实验性 `cmd/mlse-goir-llvm-exp` 当前额外支持：
+
+- `-slice-model=min`：默认最小 slice 表示 `{data,len}`
+- `-slice-model=cap`：实验性 slice 表示 `{data,len,cap}`，并启用 `cap(xs)` lowering
+
 验证优先级如下：
 
 1. `opt` verifier
@@ -158,8 +198,8 @@ scripts/tinygo-probe-local.sh
 
 当前仓库**还没有**：
 
-- 真正的 MLIR builder
-- LLVM/MLIR/CIR 正式依赖接入
+- 完整的 frontend / pass / lowering 管线
+- 与 CI 集成的稳定 LLVM/MLIR toolchain provisioning
 - Docker 化完整开发环境
 - 统一 CI 流程
 

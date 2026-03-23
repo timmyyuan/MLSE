@@ -103,11 +103,18 @@ func splitTrailingType(input string) (string, string, error) {
 }
 
 func mustLLVMType(goTy string) string {
+	return mustLLVMTypeWithOptions(goTy, LoweringOptions{})
+}
+
+func mustLLVMTypeWithOptions(goTy string, opts LoweringOptions) string {
+	sliceTy := newSliceLayout(opts.SliceModel).llvmType()
 	switch {
 	case goTy == "" || goTy == "!go.unit":
 		return "void"
 	case goTy == "i1", goTy == "i8", goTy == "i16", goTy == "i32", goTy == "i64":
 		return goTy
+	case isGoSliceType(goTy):
+		return sliceTy
 	case strings.HasPrefix(goTy, "!go.named<"):
 		name := strings.TrimSuffix(strings.TrimPrefix(goTy, "!go.named<\""), "\">")
 		switch name {
@@ -129,6 +136,36 @@ func mustLLVMType(goTy string) string {
 	default:
 		return "!llvm.ptr"
 	}
+}
+
+func isGoSliceType(goTy string) bool {
+	return strings.HasPrefix(goTy, "!go.slice<")
+}
+
+func sliceLLVMType() string {
+	return newSliceLayout(SliceModelMin).llvmType()
+}
+
+func sliceExprResultType(baseTy string) string {
+	switch {
+	case strings.HasPrefix(baseTy, "!go.string"):
+		return "!go.string"
+	case isGoSliceType(baseTy):
+		return baseTy
+	case strings.HasPrefix(baseTy, "!go.array<"):
+		return "!go.slice<" + unwrapGoTypeArg(baseTy) + ">"
+	default:
+		return "!go.any"
+	}
+}
+
+func unwrapGoTypeArg(goTy string) string {
+	start := strings.IndexByte(goTy, '<')
+	end := strings.LastIndexByte(goTy, '>')
+	if start < 0 || end <= start+1 {
+		return "!go.any"
+	}
+	return strings.TrimSpace(goTy[start+1 : end])
 }
 
 func isIntegerLLVMType(llvmTy string) bool {
@@ -329,4 +366,29 @@ func splitMLSEIndexExpr(raw string) (string, string, bool) {
 		return "", "", false
 	}
 	return base, index, true
+}
+
+func splitMLSESliceExpr(raw string) (string, string, string, bool, bool) {
+	text := strings.TrimSpace(strings.TrimPrefix(raw, "mlse.slice "))
+	if text == "" {
+		return "", "", "", false, false
+	}
+	end := strings.LastIndexByte(text, ']')
+	start := strings.LastIndexByte(text, '[')
+	if end < 0 || start < 0 {
+		return text, "", "", false, true
+	}
+	if end != len(text)-1 || start >= end {
+		return "", "", "", false, false
+	}
+	base := strings.TrimSpace(text[:start])
+	if base == "" {
+		return "", "", "", false, false
+	}
+	bounds := text[start+1 : end]
+	parts := strings.SplitN(bounds, ":", 2)
+	if len(parts) != 2 {
+		return "", "", "", false, false
+	}
+	return base, strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true, true
 }

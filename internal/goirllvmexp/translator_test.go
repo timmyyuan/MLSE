@@ -121,6 +121,16 @@ func lowerFixture(t *testing.T, inputPath string) string {
 	return got
 }
 
+func lowerWithOptions(t *testing.T, input string, opts LoweringOptions) string {
+	t.Helper()
+
+	got, err := LowerToLLVMDialectModuleWithOptions(input, opts)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModuleWithOptions returned error: %v", err)
+	}
+	return got
+}
+
 func writeTempText(t *testing.T, name string, ext string, text string) string {
 	t.Helper()
 
@@ -653,6 +663,263 @@ func TestLowerToLLVMDialectMaterializesStringLiteralsAsGlobals(t *testing.T) {
 	}
 	if !strings.Contains(got, `llvm.mlir.addressof @str0 : !llvm.ptr`) {
 		t.Fatalf("missing string global address in output:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersSliceLenFromStructField(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>) -> i32 {
+    %n = mlse.call %len(%xs) : i32
+    return %n : i32
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, `llvm.func @Target(%xs: !llvm.struct<(!llvm.ptr, i32)>) -> i32`) {
+		t.Fatalf("missing minimal slice struct signature:\n%s", got)
+	}
+	if strings.Contains(got, `llvm.func @len`) || strings.Contains(got, `llvm.call @len`) {
+		t.Fatalf("unexpected external len fallback in output:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.extractvalue`) {
+		t.Fatalf("missing slice length extract in output:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersSliceIndexViaSliceDataPointer(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>) -> i32 {
+    %v = mlse.index %xs[1] : i32
+    return %v : i32
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, `llvm.extractvalue`) {
+		t.Fatalf("missing slice data extract in output:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.getelementptr`) {
+		t.Fatalf("missing slice index gep in output:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.load`) {
+		t.Fatalf("missing slice index load in output:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectPreservesMlseSliceValue(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>) -> !go.slice<i32> {
+    %ys = mlse.slice %xs : !go.slice<i32>
+    return %ys : !go.slice<i32>
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, `llvm.func @Target(%xs: !llvm.struct<(!llvm.ptr, i32)>) -> !llvm.struct<(!llvm.ptr, i32)>`) {
+		t.Fatalf("missing slice struct passthrough signature:\n%s", got)
+	}
+	if strings.Contains(got, `llvm.mlir.zero : !llvm.struct<(!llvm.ptr, i32)>`) {
+		t.Fatalf("unexpected zero fallback for mlse.slice in output:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersSliceSubviewWithUpperBound(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>, %j: i32) -> !go.slice<i32> {
+    %ys = mlse.slice %xs[:%j] : !go.slice<i32>
+    return %ys : !go.slice<i32>
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, `llvm.insertvalue`) {
+		t.Fatalf("missing rebuilt slice aggregate:\n%s", got)
+	}
+	if strings.Contains(got, `llvm.mlir.zero : !llvm.struct<(!llvm.ptr, i32)>`) {
+		t.Fatalf("unexpected zero fallback for bounded mlse.slice:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersSliceSubviewWithLowerBound(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>, %i: i32) -> !go.slice<i32> {
+    %ys = mlse.slice %xs[%i:] : !go.slice<i32>
+    return %ys : !go.slice<i32>
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, `llvm.getelementptr`) {
+		t.Fatalf("missing sub-slice data offset:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.sub`) {
+		t.Fatalf("missing lower-bound length adjustment:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.insertvalue`) {
+		t.Fatalf("missing rebuilt slice aggregate:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersSliceSubviewWithBothBounds(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>, %i: i32, %j: i32) -> !go.slice<i32> {
+    %ys = mlse.slice %xs[%i:%j] : !go.slice<i32>
+    return %ys : !go.slice<i32>
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if !strings.Contains(got, `llvm.getelementptr`) {
+		t.Fatalf("missing bounded sub-slice data offset:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.sub`) {
+		t.Fatalf("missing bounded sub-slice length adjustment:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.insertvalue`) {
+		t.Fatalf("missing rebuilt slice aggregate:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersLenOfBoundedSliceSubview(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>, %i: i32, %j: i32) -> i32 {
+    %n = mlse.call %len(mlse.slice %xs[%i:%j]) : i32
+    return %n : i32
+  }
+}
+`
+
+	got, err := LowerToLLVMDialectModule(input)
+	if err != nil {
+		t.Fatalf("LowerToLLVMDialectModule returned error: %v", err)
+	}
+	if strings.Contains(got, `llvm.call @len`) {
+		t.Fatalf("unexpected external len fallback for bounded slice:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.sub`) {
+		t.Fatalf("missing bounded slice length arithmetic:\n%s", got)
+	}
+	if !strings.Contains(got, `llvm.extractvalue`) {
+		t.Fatalf("missing slice field extraction for bounded len:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectRejectsInvalidSliceModelOption(t *testing.T) {
+	input := `module {
+  func.func @Target() {
+    return
+  }
+}
+`
+
+	_, err := LowerToLLVMDialectModuleWithOptions(input, LoweringOptions{SliceModel: SliceModel("weird")})
+	if err == nil || !strings.Contains(err.Error(), `unsupported slice model "weird"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLowerToLLVMDialectLowersSliceCapFromStructFieldInCapMode(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>) -> i32 {
+    %n = mlse.call %cap(%xs) : i32
+    return %n : i32
+  }
+}
+`
+
+	got := lowerWithOptions(t, input, LoweringOptions{SliceModel: SliceModelCap})
+	if !strings.Contains(got, `llvm.func @Target(%xs: !llvm.struct<(!llvm.ptr, i32, i32)>) -> i32`) {
+		t.Fatalf("missing cap slice struct signature:\n%s", got)
+	}
+	if strings.Contains(got, `llvm.func @cap`) || strings.Contains(got, `llvm.call @cap`) {
+		t.Fatalf("unexpected external cap fallback in output:\n%s", got)
+	}
+	if !strings.Contains(got, `[2] : !llvm.struct<(!llvm.ptr, i32, i32)>`) {
+		t.Fatalf("missing slice capacity field access in output:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectKeepsUpperBoundSubsliceCapacityInCapMode(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>, %j: i32) -> !go.slice<i32> {
+    %ys = mlse.slice %xs[:%j] : !go.slice<i32>
+    return %ys : !go.slice<i32>
+  }
+}
+`
+
+	got := lowerWithOptions(t, input, LoweringOptions{SliceModel: SliceModelCap})
+	if !strings.Contains(got, `!llvm.struct<(!llvm.ptr, i32, i32)>`) {
+		t.Fatalf("missing cap slice struct in output:\n%s", got)
+	}
+	if strings.Count(got, `llvm.sub `) != 0 {
+		t.Fatalf("unexpected subtraction for upper-bound-only sub-slice:\n%s", got)
+	}
+	if strings.Count(got, `llvm.insertvalue`) != 3 {
+		t.Fatalf("expected three-field slice rebuild in cap mode:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectAdjustsLowerBoundSubsliceCapacityInCapMode(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>, %i: i32) -> !go.slice<i32> {
+    %ys = mlse.slice %xs[%i:] : !go.slice<i32>
+    return %ys : !go.slice<i32>
+  }
+}
+`
+
+	got := lowerWithOptions(t, input, LoweringOptions{SliceModel: SliceModelCap})
+	if !strings.Contains(got, `[2] : !llvm.struct<(!llvm.ptr, i32, i32)>`) {
+		t.Fatalf("missing capacity field access in output:\n%s", got)
+	}
+	if strings.Count(got, `llvm.sub `) != 2 {
+		t.Fatalf("expected length and capacity subtraction for lower-bound sub-slice:\n%s", got)
+	}
+}
+
+func TestLowerToLLVMDialectLowersCapOfBoundedSubsliceInCapMode(t *testing.T) {
+	input := `module {
+  func.func @Target(%xs: !go.slice<i32>, %i: i32, %j: i32) -> i32 {
+    %n = mlse.call %cap(mlse.slice %xs[%i:%j]) : i32
+    return %n : i32
+  }
+}
+`
+
+	got := lowerWithOptions(t, input, LoweringOptions{SliceModel: SliceModelCap})
+	if strings.Contains(got, `llvm.call @cap`) {
+		t.Fatalf("unexpected external cap fallback for bounded sub-slice:\n%s", got)
+	}
+	if strings.Count(got, `llvm.sub `) != 2 {
+		t.Fatalf("expected bounded sub-slice to adjust len and cap:\n%s", got)
+	}
+	if !strings.Contains(got, `[2] : !llvm.struct<(!llvm.ptr, i32, i32)>`) {
+		t.Fatalf("missing cap field extraction for bounded sub-slice:\n%s", got)
 	}
 }
 

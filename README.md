@@ -22,6 +22,11 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 - [GoIR 方言 bootstrap 说明](docs/goir-dialect.md)
 - [GoIR 到 LLVM 实验说明](docs/goir-llvm-experiment.md)
 
+当前在本机已验证过两条最小可运行路径：
+
+- `scripts/build.sh` + `scripts/test.sh`：构建并测试 Go 主线代码
+- `scripts/build-mlir.sh`：配置并构建最小 `mlse-opt`，可解析 `test/GoIR/ir/` 下样例
+
 ## Agent 约定
 
 - 后续 agent 写代码前，先看仓库根目录的 `AGENTS.md`。
@@ -126,7 +131,13 @@ GoIR-like text -> LLVM dialect MLIR -> LLVM IR
 ```bash
 go run ./cmd/mlse-goir-llvm-exp ./testdata/simple_add.mlir
 go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect ./testdata/simple_add.mlir
+go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect -slice-model=cap ./testdata/simple_add.mlir
 ```
+
+其中 `-slice-model` 当前支持：
+
+- `min`：默认最小 slice 运行时表示 `{data,len}`
+- `cap`：实验性 slice 运行时表示 `{data,len,cap}`，并启用 `cap(xs)` lowering
 
 更多说明见：
 

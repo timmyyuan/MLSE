@@ -1,0 +1,208 @@
+{
+  "baseline_snapshot": "testdata/tinygo-probes/etcd-v3.5.9",
+  "post_tidy_snapshot": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy",
+  "post_tidy_target": {
+    "repo_dir": "tmp/etcd-targets/helper-smoke-v359-tidied-20260320",
+    "cache_seed": "tmp/tidy-v359-20260320/gomodcache",
+    "warmup_summary": "testdata/tinygo-probes/etcd-v3.5.9-post-tidy/module-warmup-summary.tsv",
+    "network_note": "Direct proxy fetches were unavailable in this sandbox, so warm-up was limited to the machine-local Go module cache copied into tmp/tidy-v359-20260320/gomodcache."
+  },
+  "warmup": {
+    "modules_total": 12,
+    "tidy_successes": 0,
+    "download_successes": 0,
+    "list_successes": 1,
+    "list_success_modules": [
+      "tools/mod"
+    ]
+  },
+  "package_probe": {
+    "before": {
+      "packages_success": 26,
+      "packages_fail": 119,
+      "package_success_rate": 0.1793103448275862,
+      "go_files_in_successful_packages": 47,
+      "failure_buckets": {
+        "dependency_availability": 114,
+        "success": 26,
+        "tinygo_or_other": 4,
+        "probe_methodology": 1
+      }
+    },
+    "after": {
+      "packages_success": 27,
+      "packages_fail": 118,
+      "package_success_rate": 0.18620689655172415,
+      "go_files_in_successful_packages": 49,
+      "failure_buckets": {
+        "dependency_availability": 113,
+        "success": 27,
+        "tinygo_or_other": 4,
+        "probe_methodology": 1
+      }
+    },
+    "delta": {
+      "packages_success": 1,
+      "packages_fail": -1,
+      "package_success_rate_pp": 0.6897,
+      "go_files_in_successful_packages": 2
+    },
+    "new_successes_from_dependency_availability": [
+      "go.etcd.io/etcd/pkg/v3/cobrautl"
+    ],
+    "newly_exposed_tinygo_failures_after_warmup": [],
+    "remaining_non_dependency_failures": [
+      {
+        "import_path": "go.etcd.io/etcd/client/pkg/v3/srv",
+        "reason": "srv/srv.go:101:18: undefined: net.SRV",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "import_path": "go.etcd.io/etcd/client/pkg/v3/testutil",
+        "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "import_path": "go.etcd.io/etcd/client/pkg/v3/tlsutil",
+        "reason": "tlsutil/tlsutil.go:65:19: undefined: tls.X509KeyPair",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "import_path": "go.etcd.io/etcd/client/v3/naming/endpoints/internal",
+        "reason": ".tinygo-probe-stubs/go.etcd.io__etcd__client__v3__naming__endpoints__internal/main.go:2:8: use of internal package go.etcd.io/etcd/client/v3/naming/endpoints/internal not allowed",
+        "classification": "probe_methodology"
+      },
+      {
+        "import_path": "go.etcd.io/etcd/server/v3/mock/mockwait",
+        "reason": "../client/pkg/testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      }
+    ]
+  },
+  "file_probe": {
+    "before": {
+      "successful_go_files": 47,
+      "failed_go_files": 597,
+      "covered_success_rate": 0.07298136645962733,
+      "omitted_test_go_files": 314,
+      "failure_buckets": {
+        "dependency_availability": 582,
+        "success": 47,
+        "tinygo_or_other": 14,
+        "probe_methodology": 1
+      }
+    },
+    "after": {
+      "successful_go_files": 49,
+      "failed_go_files": 595,
+      "covered_success_rate": 0.07608695652173914,
+      "omitted_test_go_files": 314,
+      "failure_buckets": {
+        "dependency_availability": 580,
+        "success": 49,
+        "tinygo_or_other": 14,
+        "probe_methodology": 1
+      }
+    },
+    "delta": {
+      "successful_go_files": 2,
+      "failed_go_files": -2,
+      "covered_success_rate_pp": 0.3106,
+      "omitted_test_go_files": 0
+    },
+    "new_successes_from_dependency_availability": [
+      {
+        "path": "pkg/cobrautl/error.go",
+        "package": "go.etcd.io/etcd/pkg/v3/cobrautl"
+      },
+      {
+        "path": "pkg/cobrautl/help.go",
+        "package": "go.etcd.io/etcd/pkg/v3/cobrautl"
+      }
+    ],
+    "newly_exposed_tinygo_failures_after_warmup": [],
+    "remaining_non_dependency_failures_examples": [
+      {
+        "path": "client/pkg/srv/srv.go",
+        "reason": "srv/srv.go:101:18: undefined: net.SRV",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/testutil/assert.go",
+        "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/testutil/leak.go",
+        "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/testutil/pauseable_handler.go",
+        "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/testutil/recorder.go",
+        "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/testutil/testingtb.go",
+        "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/testutil/testutil.go",
+        "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/testutil/var.go",
+        "reason": "testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/tlsutil/cipher_suites.go",
+        "reason": "tlsutil/tlsutil.go:65:19: undefined: tls.X509KeyPair",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/tlsutil/doc.go",
+        "reason": "tlsutil/tlsutil.go:65:19: undefined: tls.X509KeyPair",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/tlsutil/tlsutil.go",
+        "reason": "tlsutil/tlsutil.go:65:19: undefined: tls.X509KeyPair",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/pkg/tlsutil/versions.go",
+        "reason": "tlsutil/tlsutil.go:65:19: undefined: tls.X509KeyPair",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "client/v3/naming/endpoints/internal/update.go",
+        "reason": ".tinygo-probe-stubs/go.etcd.io__etcd__client__v3__naming__endpoints__internal/main.go:2:8: use of internal package go.etcd.io/etcd/client/v3/naming/endpoints/internal not allowed",
+        "classification": "probe_methodology"
+      },
+      {
+        "path": "server/mock/mockwait/doc.go",
+        "reason": "../client/pkg/testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      },
+      {
+        "path": "server/mock/mockwait/wait_recorder.go",
+        "reason": "../client/pkg/testutil/leak.go:161:42: http.DefaultTransport.(*http.Transport).CloseIdleConnections undefined (type *http.Transport has no field or method CloseIdleConnections)",
+        "classification": "tinygo_or_other"
+      }
+    ]
+  },
+  "interpretation": [
+    "The offline warm-up improved only one package and two non-test files: go.etcd.io/etcd/pkg/v3/cobrautl plus pkg/cobrautl/error.go and pkg/cobrautl/help.go.",
+    "Dependency-availability failures remained the dominant blocker after warm-up: packages 114 -> 113 and covered files 582 -> 580.",
+    "Actual TinyGo/runtime incompatibility counts did not increase after warm-up: package-level tinygo_or_other stayed at 4 and file-level tinygo_or_other stayed at 14, so the tidy run did not reveal a new compatibility frontier.",
+    "The main remaining wins are still gated on missing transitive modules inside the local cache seed, with top post-tidy blockers now appearing inside cached dependencies such as go.etcd.io/bbolt, github.com/olekukonko/tablewriter, and github.com/tmc/grpc-websocket-proxy."
+  ]
+}

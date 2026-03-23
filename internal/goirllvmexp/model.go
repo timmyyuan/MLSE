@@ -151,6 +151,8 @@ type funcEmitter struct {
 	externs       map[string]externDecl
 	locals        map[string]localSlot
 	constants     map[string]string
+	options       LoweringOptions
+	sliceLayout   sliceLayout
 	lines         []string
 	prologue      []string
 	resultGoTys   []string

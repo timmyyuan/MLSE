@@ -64,6 +64,9 @@ func emitExpr(expr ast.Expr, env *env) (value string, ty string, prelude string)
 			prelude.WriteString(fmt.Sprintf("    %s = mlse.zero : %s\n", tmp, targetTy))
 			return tmp, targetTy, prelude.String()
 		}
+		if builtin, ok := builtinCallName(e.Fun); ok {
+			return emitBuiltinCallExpr(builtin, e, env)
+		}
 		if len(e.Args) == 1 {
 			targetTy := goTypeToMLIR(e.Fun)
 			if targetTy != "!go.any" {
@@ -113,8 +116,7 @@ func emitExpr(expr ast.Expr, env *env) (value string, ty string, prelude string)
 		idx, _, pi := emitExpr(e.Index, env)
 		return fmt.Sprintf("mlse.index %s[%s]", x, idx), rangeValueType(xTy), px + pi
 	case *ast.SliceExpr:
-		x, xTy, px := emitExpr(e.X, env)
-		return fmt.Sprintf("mlse.slice %s", x), inferSliceExprType(e, xTy), px
+		return emitSliceExpr(e, env)
 	case *ast.TypeAssertExpr:
 		x, _, px := emitExpr(e.X, env)
 		return fmt.Sprintf("mlse.typeassert %s", x), goTypeToMLIR(e.Type), px
@@ -138,6 +140,71 @@ func isAtomicMLIRValue(value string) bool {
 		return true
 	}
 	return true
+}
+
+func builtinCallName(expr ast.Expr) (string, bool) {
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	switch ident.Name {
+	case "len", "cap", "copy", "append":
+		return ident.Name, true
+	default:
+		return "", false
+	}
+}
+
+func emitBuiltinCallExpr(name string, call *ast.CallExpr, env *env) (string, string, string) {
+	var prelude strings.Builder
+	args := make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		value, valueTy, inner := emitExpr(arg, env)
+		value, inner = materializeExprValue(value, valueTy, inner, env, name+"_arg")
+		prelude.WriteString(inner)
+		args = append(args, value)
+	}
+	resultTy := inferCallResultType(call, env)
+	tmp := env.temp("call")
+	prelude.WriteString(formatBuiltinCall(tmp, name, args, resultTy))
+	return tmp, resultTy, prelude.String()
+}
+
+func formatBuiltinCall(dest, name string, args []string, resultTy string) string {
+	return fmt.Sprintf("    %s = mlse.call %%%s(%s) : %s\n", dest, sanitizeName(name), strings.Join(args, ", "), resultTy)
+}
+
+func emitSliceExpr(expr *ast.SliceExpr, env *env) (string, string, string) {
+	base, baseTy, prelude := emitExpr(expr.X, env)
+	base, prelude = materializeExprValue(base, baseTy, prelude, env, "slice_base")
+	low, lowPrelude := emitSliceBound(expr.Low, env, "slice_low")
+	high, highPrelude := emitSliceBound(expr.High, env, "slice_high")
+	prelude += lowPrelude + highPrelude
+
+	resultTy := inferSliceExprType(expr, baseTy)
+	if expr.Slice3 || expr.Max != nil {
+		return fmt.Sprintf("mlse.slice %s", base), resultTy, prelude
+	}
+	if low == "" && high == "" {
+		return fmt.Sprintf("mlse.slice %s", base), resultTy, prelude
+	}
+	return fmt.Sprintf("mlse.slice %s[%s:%s]", base, low, high), resultTy, prelude
+}
+
+func emitSliceBound(expr ast.Expr, env *env, prefix string) (string, string) {
+	if expr == nil {
+		return "", ""
+	}
+	value, ty, prelude := emitExpr(expr, env)
+	return materializeExprValue(value, ty, prelude, env, prefix)
+}
+
+func materializeExprValue(value, ty, prelude string, env *env, prefix string) (string, string) {
+	if isAtomicMLIRValue(value) {
+		return value, prelude
+	}
+	tmp := env.temp(prefix)
+	return tmp, prelude + fmt.Sprintf("    %s = %s : %s\n", tmp, value, ty)
 }
 
 func inferExprType(expr ast.Expr, env *env) string {
