@@ -1,12 +1,16 @@
+#include "mlse/Go/Conversion/BootstrapLowering.h"
 #include "mlse/Go/IR/GoDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
@@ -20,6 +24,15 @@ int main(int argc, char **argv) {
       llvm::cl::Positional,
       llvm::cl::desc("<input.mlir>"),
       llvm::cl::Required);
+  llvm::cl::opt<bool> lowerGoBuiltinsFlag(
+      "lower-go-builtins",
+      llvm::cl::desc("Lower go.len/go.cap/go.index/go.append to runtime helper calls"),
+      llvm::cl::init(false));
+  llvm::cl::opt<bool> lowerGoBootstrapFlag(
+      "lower-go-bootstrap",
+      llvm::cl::desc(
+          "Lower go bootstrap types and ops to LLVM-legal MLIR using runtime helper calls"),
+      llvm::cl::init(false));
   llvm::cl::ParseCommandLineOptions(argc, argv, "MLSE Go dialect bootstrap\n");
 
   mlir::DialectRegistry registry;
@@ -27,6 +40,7 @@ int main(int argc, char **argv) {
                   mlir::cf::ControlFlowDialect,
                   mlir::func::FuncDialect,
                   mlir::go::GoDialect,
+                  mlir::LLVM::LLVMDialect,
                   mlir::scf::SCFDialect>();
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
@@ -41,6 +55,17 @@ int main(int argc, char **argv) {
   sourceMgr.AddNewSourceBuffer(std::move(*inputFile), llvm::SMLoc());
   auto module = mlir::parseSourceFile<mlir::ModuleOp>(sourceMgr, &context);
   if (!module) {
+    return 1;
+  }
+
+  if (lowerGoBuiltinsFlag &&
+      mlir::failed(mlir::mlse::go::conversion::lowerGoBuiltins(*module))) {
+    llvm::errs() << "mlse-opt: failed to lower go builtins\n";
+    return 1;
+  }
+  if (lowerGoBootstrapFlag &&
+      mlir::failed(mlir::mlse::go::conversion::lowerGoBootstrap(*module))) {
+    llvm::errs() << "mlse-opt: failed to lower go bootstrap dialect\n";
     return 1;
   }
 

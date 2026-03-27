@@ -8,9 +8,9 @@
 
 - [spec.md](spec.md): 仓库初始化阶段的规格说明，定义目标、范围、目录规划和协作基线。
 - [go-frontend.md](go-frontend.md): Go 前端 MVP 的能力边界、临时 stub 和后续扩展方向。
+- [go-frontend-lowering.md](go-frontend-lowering.md): `internal/gofrontend/formal_*` 的 lowering 入口地图与源码前后对照示例。
 - [goir-dialect.md](goir-dialect.md): 正式 `go` dialect 的 TableGen/CMake bootstrap、当前边界和构建方式。
 - [dev-setup.md](dev-setup.md): 当前可用脚本、目录约定以及 tinygo 实验入口。
-- [goir-llvm-experiment.md](goir-llvm-experiment.md): GoIR 到 LLVM IR 的最小实验路径、结果和后续建议。
 
 ## 建议后续补充的文档
 

@@ -9,9 +9,9 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 ## 当前状态
 
 - 状态：初始化中，已落下第一个可运行原型
-- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP（默认输出正式 `go` dialect，保留 `goir-like` 兼容模式）、`cmd/mlse-goir-llvm-exp` 实验性 GoIR 后端，以及第一批正式 `go` dialect C++/TableGen 骨架
-- 文档：已补充技术规划版 spec、docs 索引、Go 前端说明、正式 GoIR dialect bootstrap 说明和实验性 GoIR 后端说明
-- 目标：一边维持实验链路做覆盖回归，一边逐步收敛到真实 frontend / MLIR 管线
+- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP，以及第一批正式 `go` dialect C++/TableGen 骨架
+- 文档：已补充技术规划版 spec、docs 索引、Go 前端说明和正式 GoIR dialect bootstrap 说明
+- 目标：继续收敛到真实 frontend / MLIR 管线，并把当前 formal bridge 扩展成可维护实现
 
 ## 文档入口
 
@@ -20,12 +20,13 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 - [开发环境说明](docs/dev-setup.md)
 - [Go 前端说明](docs/go-frontend.md)
 - [GoIR 方言 bootstrap 说明](docs/goir-dialect.md)
-- [GoIR 到 LLVM 实验说明](docs/goir-llvm-experiment.md)
 
 当前在本机已验证过两条最小可运行路径：
 
 - `scripts/build.sh` + `scripts/test.sh`：构建并测试 Go 主线代码
+- `scripts/test-all.sh`：运行仓库当前的统一测试入口，覆盖 Go、linters 和 repo-owned MLIR bridge 样例
 - `scripts/build-mlir.sh`：配置并构建最小 `mlse-opt`，可解析 `test/GoIR/ir/` 下样例
+- `scripts/lint.sh`：运行仓库当前的 Go/C++/Python 规范检查入口
 
 ## Agent 约定
 
@@ -50,6 +51,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 │   ├── README.md
 │   └── spec.md
 ├── docker/
+├── linters/
 ├── include/mlse/
 ├── lib/
 ├── tools/
@@ -69,16 +71,14 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 - 读取单个 `.go` 文件
 - 解析 package 级函数
 - 支持 `int` 参数 / 返回值，以及条件/参数位置的 `bool`
-- 支持局部 `var` / `:=`、赋值、整数常量、字符串常量、标识符、`+ - * /`、整数比较、直接调用、`make([]T, ...)`、`nil`、`return`
-- 已开始把简单 `if` 和标准计数循环 lower 到 `scf.if` / `scf.for`
-- 默认输出可被 `mlse-opt` 解析的正式 MLIR：以 `func/arith` 为主，必要时补 `go.string_constant`、`go.nil`、`go.make_slice`、`go.todo`、`go.todo_value`
-- 同时保留 `-emit=goir-like`，继续输出旧的 GoIR-like 文本给实验后端回归用
+- 支持局部 `var` / `:=`、标识符赋值，以及受限的 selector/index/deref 赋值、整数常量、字符串常量、标识符、`+ - * /`、整数比较、直接调用、`make([]T, ...)`、`nil`、`return`
+- 已开始把简单 `if`、标准计数循环和受限 `range` 直接 lower 到 `scf.if` / `scf.for`
+- 默认输出可被 `mlse-opt` 解析的正式 MLIR：以 `func/arith` 为主，直接 `len/cap/append`、`append(dst, src...)`、string `index`、以及 slice 下标地址化路径已开始产出 `go.len`、`go.cap`、`go.index`、`go.append`、`go.append_slice`、`go.elem_addr`、`go.load`、`go.store`，必要时补 `go.string_constant`、`go.nil`、`go.make_slice`、`go.todo`、`go.todo_value`
 
 运行示例：
 
 ```bash
 go run ./cmd/mlse-go ./examples/go/simple_add.go
-go run ./cmd/mlse-go -emit=goir-like ./examples/go/simple_add.go
 ```
 
 示例输出：
@@ -101,47 +101,22 @@ module {
 仓库现在已经新增第一批正式 MLIR 工程骨架：
 
 - `include/mlse/Go/IR/`：`go` dialect 的 TableGen 与头文件
+- `include/mlse/Go/Conversion/`：Go 专属 lowering / conversion 头文件
 - `lib/Go/IR/`：dialect 注册与类型定义实现
-- `tools/mlse-opt/`：最小 MLIR 驱动，用于注册 `go` dialect 并解析样例
+- `lib/Go/Conversion/`：Go bootstrap lowering 实现
+- `tools/mlse-opt/`：最小 MLIR 驱动，只负责注册 dialect、解析输入并接线显式 lowering 入口
 - `test/GoIR/ir/`：正式 GoIR 方向的最小 IR 样本
 
 当前这条线已经落了第一批 `go` 类型和自定义 op：
 
 - 类型：`!go.string`、`!go.error`、`!go.named<...>`、`!go.ptr<T>`、`!go.slice<T>`
-- op：`go.string_constant`、`go.nil`、`go.make_slice`、`go.todo`、`go.todo_value`
+- op：`go.string_constant`、`go.nil`、`go.make_slice`、`go.len`、`go.cap`、`go.index`、`go.append`、`go.append_slice`、`go.elem_addr`、`go.field_addr`、`go.load`、`go.store`、`go.todo`、`go.todo_value`
 
-它还没有完整的 frontend / pass / lowering，但已经标志着仓库从“纯 Go 文本原型”进入“真实 MLIR dialect 工程面”；`cmd/mlse-go` 现在已经可以直接产出这套正式 dialect 的最小 parseable 子集。
+它还没有完整的 frontend / pass / lowering，但已经标志着仓库从“纯 Go 文本原型”进入“真实 MLIR dialect 工程面”；`cmd/mlse-go` 现在已经可以直接产出这套正式 dialect 的最小 parseable 子集。与此同时，`mlse-opt` 现在除了 `--lower-go-builtins` 之外，还新增了一个更完整的 `--lower-go-bootstrap` 入口，用来把当前 `!go.*` 类型和这批 bootstrap op lower 到可继续走 `mlir-opt -> mlir-translate -> LLVM IR` 的 LLVM-legal MLIR。这个 lowering 现在已经不再内嵌在 `tools/mlse-opt/` 下，而是作为可复用实现放进 `Go/Conversion`，`mlse-opt.cpp` 只保留驱动和命令行接线职责。
 
 更多说明见：
 
 - [docs/goir-dialect.md](docs/goir-dialect.md)
-
-### `cmd/mlse-goir-llvm-exp`
-
-这是一个实验性的 GoIR-like 后端路径。
-
-当前默认链路是：
-
-```text
-GoIR-like text -> LLVM dialect MLIR -> LLVM IR
-```
-
-运行示例：
-
-```bash
-go run ./cmd/mlse-goir-llvm-exp ./testdata/simple_add.mlir
-go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect ./testdata/simple_add.mlir
-go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect -slice-model=cap ./testdata/simple_add.mlir
-```
-
-其中 `-slice-model` 当前支持：
-
-- `min`：默认最小 slice 运行时表示 `{data,len}`
-- `cap`：实验性 slice 运行时表示 `{data,len,cap}`，并启用 `cap(xs)` lowering
-
-更多说明见：
-
-- [docs/goir-llvm-experiment.md](docs/goir-llvm-experiment.md)
 
 ## 协作原则
 
@@ -153,10 +128,30 @@ go run ./cmd/mlse-goir-llvm-exp -emit=llvm-dialect -slice-model=cap ./testdata/s
 - 文档与代码一致：一旦代码落地，README 和 spec 需要同步更新。
 - 优先可维护性：目录、命名和模块边界要为未来协作留出空间。
 
+## 当前 lint 约定
+
+仓库现在把代码规范检查集中到 `linters/`：
+
+- Go：`gofmt -l`、`go vet`、代码规模阈值检查，以及“单次调用的纯转发 wrapper + 单次调用 callee”检查
+- C++：代码规模阈值检查
+- Python：`py_compile` 和代码规模阈值检查
+
+默认阈值是：
+
+- 参数个数不超过 `5`
+- 函数长度不超过 `200` 行
+- 文件长度不超过 `2000` 行
+
+统一入口：
+
+```bash
+scripts/lint.sh
+```
+
 ## 下一步建议
 
 - 建立 Docker 开发环境和统一脚本入口。
-- 继续把当前实验性 GoIR 后端替换为真实的 canonical MLIR / pass 管线。
+- 继续把当前 Go formal bridge 扩展成真实的 frontend / pass 管线。
 - 为 `C/C++` 集成启用 `CIR` 的 Clang/ClangIR。
 - 定义统一的 frontend contract 和最小可支持语言子集。
 - 创建编译驱动、dialect、pass、测试、lint 和 clean 骨架。

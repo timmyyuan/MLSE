@@ -3,6 +3,7 @@ add_mlir_tool(mlse-opt
 )
 
 target_link_libraries(mlse-opt PRIVATE
+  MLSEGoBootstrapLowering
   MLSEGoDialect
   MLIRArithDialect
   MLIRControlFlowDialect

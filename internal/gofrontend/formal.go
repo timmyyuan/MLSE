@@ -1,3 +1,5 @@
+// This file contains the core Go AST -> formal MLIR dispatcher.
+// See docs/go-frontend-lowering.md#core-dispatch.
 package gofrontend
 
 import (
@@ -9,208 +11,89 @@ import (
 	"strings"
 )
 
-type formalBinding struct {
-	current string
-	ty      string
+type formalGoCompareSpec struct {
+	op         token.Token
+	lhs        string
+	rhs        string
+	operandTy  string
+	lhsPrelude string
+	rhsPrelude string
 }
 
-type formalEnv struct {
-	locals map[string]*formalBinding
-	tempID int
+// emitFormalFunc lowers one parsed Go function or method into module text.
+func emitFormalFunc(fn *ast.FuncDecl, module *formalModuleContext) string {
+	return emitFormalFuncBody(formalFuncBodySpec{
+		name:   formalFuncSymbol(fn, module),
+		recv:   fn.Recv,
+		fnType: fn.Type,
+		body:   fn.Body,
+	}, module)
 }
 
-func newFormalEnv() *formalEnv {
-	return &formalEnv{locals: make(map[string]*formalBinding)}
-}
-
-func (e *formalEnv) define(name string, ty string) string {
-	if binding, ok := e.locals[name]; ok {
-		if ty != "" {
-			binding.ty = ty
-		}
-		return binding.current
-	}
-	ssa := "%" + sanitizeName(name)
-	e.locals[name] = &formalBinding{current: ssa, ty: ty}
-	return ssa
-}
-
-func (e *formalEnv) assign(name string, ty string) string {
-	if _, ok := e.locals[name]; !ok {
-		return e.define(name, ty)
-	}
-	binding := e.locals[name]
-	if ty != "" {
-		binding.ty = ty
-	}
-	return binding.current
-}
-
-func (e *formalEnv) defineOrAssign(name string, ty string) string {
-	if _, ok := e.locals[name]; ok {
-		return e.assign(name, ty)
-	}
-	return e.define(name, ty)
-}
-
-func (e *formalEnv) bindValue(name string, value string, ty string) {
-	if binding, ok := e.locals[name]; ok {
-		binding.current = value
-		if ty != "" {
-			binding.ty = ty
-		}
-		return
-	}
-	e.locals[name] = &formalBinding{current: value, ty: ty}
-}
-
-func (e *formalEnv) use(name string) string {
-	if binding, ok := e.locals[name]; ok {
-		return binding.current
-	}
-	return e.define(name, formalOpaqueType("value"))
-}
-
-func (e *formalEnv) typeOf(name string) string {
-	if binding, ok := e.locals[name]; ok && binding.ty != "" {
-		return binding.ty
-	}
-	return formalOpaqueType("value")
-}
-
-func (e *formalEnv) temp(prefix string) string {
-	e.tempID++
-	return fmt.Sprintf("%%%s%d", sanitizeName(prefix), e.tempID)
-}
-
-func (e *formalEnv) clone() *formalEnv {
-	cloned := &formalEnv{
-		locals: make(map[string]*formalBinding, len(e.locals)),
-		tempID: e.tempID,
-	}
-	for name, binding := range e.locals {
-		copied := *binding
-		cloned.locals[name] = &copied
-	}
-	return cloned
-}
-
-func syncFormalTempID(target *formalEnv, others ...*formalEnv) {
-	for _, other := range others {
-		if other != nil && other.tempID > target.tempID {
-			target.tempID = other.tempID
-		}
-	}
-}
-
-func emitFormalFunc(fn *ast.FuncDecl) string {
-	env := newFormalEnv()
-	params := emitFormalParams(fn.Type.Params, env)
-	results := emitFormalResultTypes(fn.Type.Results)
+func emitFormalFuncBody(spec formalFuncBodySpec, module *formalModuleContext) string {
+	env := newFormalEnv(module)
+	env.currentFunc = sanitizeName(spec.name)
+	params := emitFormalParams(formalJoinFieldLists(spec.recv, spec.fnType.Params), env)
+	results := emitFormalResultTypes(spec.fnType.Results, module)
+	env.resultTypes = append([]string(nil), results...)
 
 	var buf strings.Builder
-	switch len(results) {
-	case 0:
-		buf.WriteString(fmt.Sprintf("  func.func @%s(%s) {\n", sanitizeName(fn.Name.Name), strings.Join(params, ", ")))
-	case 1:
-		buf.WriteString(fmt.Sprintf("  func.func @%s(%s) -> %s {\n", sanitizeName(fn.Name.Name), strings.Join(params, ", "), results[0]))
-	default:
-		buf.WriteString(fmt.Sprintf("  func.func @%s(%s) -> (%s) {\n", sanitizeName(fn.Name.Name), strings.Join(params, ", "), strings.Join(results, ", ")))
+	if spec.private {
+		buf.WriteString(formatPrivateFuncHeader(spec.name, params, results))
+	} else {
+		buf.WriteString(formatFuncHeader(spec.name, params, results))
 	}
 
 	terminated := false
-	if fn.Body == nil {
+	if spec.body == nil {
 		buf.WriteString("    go.todo \"missing_body\"\n")
 	} else {
-		body, term := emitFormalFuncBlock(fn.Body.List, env, results)
-		buf.WriteString(body)
+		bodyText, term := emitFormalFuncBlock(spec.body.List, env, results)
+		buf.WriteString(bodyText)
 		terminated = term
 	}
 	if !terminated {
-		buf.WriteString("    go.todo \"implicit_return_placeholder\"\n")
+		if len(results) > 0 {
+			buf.WriteString("    go.todo \"implicit_return_placeholder\"\n")
+		}
 		buf.WriteString(emitFormalFallbackReturn(results, env))
 	}
 	buf.WriteString("  }\n")
 	return buf.String()
 }
 
-func emitFormalFuncBlock(stmts []ast.Stmt, env *formalEnv, resultTypes []string) (string, bool) {
-	var buf strings.Builder
-	for i := 0; i < len(stmts); i++ {
-		if ifStmt, ok := stmts[i].(*ast.IfStmt); ok {
-			var next ast.Stmt
-			if i+1 < len(stmts) {
-				next = stmts[i+1]
-			}
-			if text, consumed, term, ok := emitFormalTerminatingIfStmt(ifStmt, next, env, resultTypes); ok {
-				buf.WriteString(text)
-				if term {
-					return buf.String(), true
-				}
-				i += consumed - 1
-				continue
-			}
-		}
-		text, term := emitFormalStmt(stmts[i], env, resultTypes)
-		buf.WriteString(text)
-		if term {
-			return buf.String(), true
-		}
-	}
-	return buf.String(), false
-}
-
-func emitFormalRegionBlock(stmts []ast.Stmt, env *formalEnv) (string, bool) {
-	var buf strings.Builder
-	for _, stmt := range stmts {
-		text, term := emitFormalStmt(stmt, env, nil)
-		buf.WriteString(text)
-		if term {
-			return buf.String(), true
-		}
-	}
-	return buf.String(), false
-}
-
 func emitFormalParams(fields *ast.FieldList, env *formalEnv) []string {
-	if fields == nil || len(fields.List) == 0 {
-		return nil
-	}
-	var out []string
-	for _, field := range fields.List {
-		ty := goTypeToFormalMLIR(field.Type)
-		if len(field.Names) == 0 {
-			name := env.temp("arg")
-			out = append(out, fmt.Sprintf("%s: %s", name, ty))
+	return emitBoundParams(
+		fields,
+		func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, env.module) },
+		func() string { return env.temp("arg") },
+		func(name string, ty string) string { return env.define(name, ty) },
+	)
+}
+
+func formalJoinFieldLists(lists ...*ast.FieldList) *ast.FieldList {
+	var combined []*ast.Field
+	for _, list := range lists {
+		if list == nil {
 			continue
 		}
-		for _, name := range field.Names {
-			ssa := env.define(name.Name, ty)
-			out = append(out, fmt.Sprintf("%s: %s", ssa, ty))
-		}
+		combined = append(combined, list.List...)
 	}
-	return out
-}
-
-func emitFormalResultTypes(fields *ast.FieldList) []string {
-	if fields == nil || len(fields.List) == 0 {
+	if len(combined) == 0 {
 		return nil
 	}
-	var out []string
-	for _, field := range fields.List {
-		ty := goTypeToFormalMLIR(field.Type)
-		count := len(field.Names)
-		if count == 0 {
-			count = 1
-		}
-		for i := 0; i < count; i++ {
-			out = append(out, ty)
-		}
-	}
-	return out
+	return &ast.FieldList{List: combined}
 }
 
+func emitFormalResultTypes(fields *ast.FieldList, module *formalModuleContext) []string {
+	return emitFieldTypes(fields, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) })
+}
+
+// emitFormalStmt dispatches statement nodes to the file-specific lowerers.
 func emitFormalStmt(stmt ast.Stmt, env *formalEnv, resultTypes []string) (string, bool) {
+	if resultTypes == nil && env != nil {
+		resultTypes = env.resultTypes
+	}
 	switch s := stmt.(type) {
 	case *ast.AssignStmt:
 		return emitFormalAssignStmt(s, env), false
@@ -224,6 +107,8 @@ func emitFormalStmt(stmt ast.Stmt, env *formalEnv, resultTypes []string) (string
 		return emitFormalIfStmt(s, env), false
 	case *ast.ForStmt:
 		return emitFormalForStmt(s, env), false
+	case *ast.RangeStmt:
+		return emitFormalRangeStmt(s, env), false
 	case *ast.IncDecStmt:
 		return emitFormalIncDecStmt(s, env), false
 	case *ast.EmptyStmt:
@@ -231,37 +116,6 @@ func emitFormalStmt(stmt ast.Stmt, env *formalEnv, resultTypes []string) (string
 	default:
 		return fmt.Sprintf("    go.todo %q\n", shortNodeName(stmt)), false
 	}
-}
-
-func emitFormalAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
-	if len(s.Lhs) != len(s.Rhs) {
-		return fmt.Sprintf("    go.todo %q\n", "assign_arity_mismatch")
-	}
-
-	var buf strings.Builder
-	for i := range s.Lhs {
-		ident, ok := s.Lhs[i].(*ast.Ident)
-		if !ok || ident.Name == "_" {
-			buf.WriteString(fmt.Sprintf("    go.todo %q\n", "assign_target"))
-			continue
-		}
-		hint := env.typeOf(ident.Name)
-		if s.Tok == token.DEFINE && hint == formalOpaqueType("value") {
-			hint = inferFormalExprType(s.Rhs[i], env)
-		}
-		value, ty, prelude := emitFormalExpr(s.Rhs[i], hint, env)
-		buf.WriteString(prelude)
-		switch s.Tok {
-		case token.DEFINE:
-			env.defineOrAssign(ident.Name, ty)
-		case token.ASSIGN:
-			env.assign(ident.Name, ty)
-		default:
-			env.assign(ident.Name, ty)
-		}
-		env.bindValue(ident.Name, value, ty)
-	}
-	return buf.String()
 }
 
 func emitFormalReturnStmt(s *ast.ReturnStmt, env *formalEnv, resultTypes []string) string {
@@ -290,6 +144,18 @@ func emitFormalReturnStmt(s *ast.ReturnStmt, env *formalEnv, resultTypes []strin
 		}
 		value, ty, prelude := emitFormalExpr(result, hint, env)
 		buf.WriteString(prelude)
+		if hint != "" && normalizeFormalType(ty) != normalizeFormalType(hint) {
+			if coercedValue, coercedTy, coercedPrelude, ok := emitFormalCoerceValue(value, ty, hint, env); ok {
+				buf.WriteString(coercedPrelude)
+				value = coercedValue
+				ty = coercedTy
+			} else {
+				todoValue, todoTy, todoPrelude := emitFormalTodoValue("return_type_mismatch", hint, env)
+				buf.WriteString(todoPrelude)
+				value = todoValue
+				ty = todoTy
+			}
+		}
 		values = append(values, value)
 		types = append(types, ty)
 	}
@@ -330,7 +196,7 @@ func emitFormalDeclStmt(s *ast.DeclStmt, env *formalEnv) string {
 			}
 			ty := formalOpaqueType("value")
 			if valueSpec.Type != nil {
-				ty = goTypeToFormalMLIR(valueSpec.Type)
+				ty = formalTypeExprToMLIR(valueSpec.Type, env.module)
 			}
 			if i < len(valueSpec.Values) {
 				if valueSpec.Type == nil {
@@ -351,11 +217,11 @@ func emitFormalDeclStmt(s *ast.DeclStmt, env *formalEnv) string {
 
 func emitFormalIfStmt(s *ast.IfStmt, env *formalEnv) string {
 	if s.Init != nil {
-		return "    go.todo \"IfStmt_init\"\n"
+		return emitFormalIfStmtWithInit(s, env)
 	}
 
-	cond, condTy, prelude := emitFormalExpr(s.Cond, "i1", env)
-	if condTy != "i1" {
+	cond, prelude, ok := emitFormalCondition(s.Cond, env)
+	if !ok {
 		return prelude + "    go.todo \"IfStmt_condition\"\n"
 	}
 
@@ -426,44 +292,102 @@ func emitFormalIfStmt(s *ast.IfStmt, env *formalEnv) string {
 		buf.WriteString("    }\n")
 		env.bindValue(name, result, ty)
 	default:
-		syncFormalTempID(env, thenEnv, elseEnv)
-		return prelude + "    go.todo \"IfStmt_multi_merge\"\n"
+		resultTypes := make([]string, 0, len(mutated))
+		thenValues := make([]string, 0, len(mutated))
+		elseValues := make([]string, 0, len(mutated))
+		for _, name := range mutated {
+			ty := thenEnv.typeOf(name)
+			if hasElse {
+				if ty == formalOpaqueType("value") {
+					ty = elseEnv.typeOf(name)
+				}
+				if normalizeFormalType(elseEnv.typeOf(name)) != normalizeFormalType(ty) {
+					syncFormalTempID(env, thenEnv, elseEnv)
+					return prelude + "    go.todo \"IfStmt_type_mismatch\"\n"
+				}
+			}
+			if ty == formalOpaqueType("value") {
+				ty = env.typeOf(name)
+			}
+			resultTypes = append(resultTypes, ty)
+			thenValues = append(thenValues, thenEnv.use(name))
+			if hasElse {
+				elseValues = append(elseValues, elseEnv.use(name))
+			} else {
+				elseValues = append(elseValues, env.use(name))
+			}
+		}
+		result := env.temp("if")
+		buf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), cond, strings.Join(resultTypes, ", ")))
+		buf.WriteString(indentBlock(thenText, 2))
+		buf.WriteString(emitFormalYieldLine(thenValues, resultTypes))
+		buf.WriteString("    } else {\n")
+		buf.WriteString(indentBlock(elseText, 2))
+		buf.WriteString(emitFormalYieldLine(elseValues, resultTypes))
+		buf.WriteString("    }\n")
+		resultValues := formalMultiResultRefs(result, len(resultTypes))
+		for i, name := range mutated {
+			env.bindValue(name, resultValues[i], resultTypes[i])
+		}
 	}
 	syncFormalTempID(env, thenEnv, elseEnv)
 	return buf.String()
 }
 
 func emitFormalForStmt(s *ast.ForStmt, env *formalEnv) string {
-	if s.Init != nil || s.Post != nil || s.Cond == nil {
-		return "    go.todo \"ForStmt\"\n"
+	var buf strings.Builder
+	if s.Init != nil {
+		initText, term := emitFormalStmt(s.Init, env, nil)
+		buf.WriteString(initText)
+		if term {
+			return buf.String()
+		}
+	}
+
+	if s.Cond == nil {
+		buf.WriteString("    go.todo \"ForStmt\"\n")
+		return buf.String()
 	}
 
 	ivName, upperExpr, ok := matchFormalCountedLoopCond(s.Cond)
 	if !ok || len(s.Body.List) == 0 {
-		return "    go.todo \"ForStmt\"\n"
+		buf.WriteString("    go.todo \"ForStmt\"\n")
+		return buf.String()
 	}
 
 	bodyStmts := s.Body.List
-	last := bodyStmts[len(bodyStmts)-1]
-	if !isFormalLoopIncrement(last, ivName) {
-		return "    go.todo \"ForStmt\"\n"
+	if s.Post != nil {
+		if !isFormalLoopIncrement(s.Post, ivName) {
+			buf.WriteString("    go.todo \"ForStmt\"\n")
+			return buf.String()
+		}
+	} else {
+		last := bodyStmts[len(bodyStmts)-1]
+		if !isFormalLoopIncrement(last, ivName) {
+			buf.WriteString("    go.todo \"ForStmt\"\n")
+			return buf.String()
+		}
+		bodyStmts = bodyStmts[:len(bodyStmts)-1]
 	}
-	bodyStmts = bodyStmts[:len(bodyStmts)-1]
 
 	ivInit := env.use(ivName)
 	ivTy := env.typeOf(ivName)
 	if !isFormalIntegerType(ivTy) {
-		return "    go.todo \"ForStmt_iv_type\"\n"
+		buf.WriteString("    go.todo \"ForStmt_iv_type\"\n")
+		return buf.String()
 	}
 
 	upper, upperTy, upperPrelude := emitFormalExpr(upperExpr, ivTy, env)
 	if upperTy != ivTy {
-		return upperPrelude + "    go.todo \"ForStmt_bound_type\"\n"
+		buf.WriteString(upperPrelude)
+		buf.WriteString("    go.todo \"ForStmt_bound_type\"\n")
+		return buf.String()
 	}
 
 	carried := collectAssignedOuterNames(bodyStmts, env, ivName)
 	if len(carried) > 1 {
-		return upperPrelude + "    go.todo \"ForStmt_multi_iter_args\"\n"
+		buf.WriteString("    go.todo \"ForStmt_multi_iter_args\"\n")
+		return buf.String()
 	}
 
 	lowerValue := ivInit
@@ -478,11 +402,10 @@ func emitFormalForStmt(s *ast.ForStmt, env *formalEnv) string {
 		upperValue = upperIndex
 		loopBoundTy = "index"
 	}
+	buf.WriteString(upperPrelude)
 
 	step := env.temp("const")
 	ivSSA := env.temp(sanitizeName(ivName) + "_iv")
-	var buf strings.Builder
-	buf.WriteString(upperPrelude)
 	buf.WriteString(fmt.Sprintf("    %s = arith.constant 1 : %s\n", step, loopBoundTy))
 
 	if len(carried) == 0 {
@@ -495,7 +418,7 @@ func emitFormalForStmt(s *ast.ForStmt, env *formalEnv) string {
 			bodyPrelude = fmt.Sprintf("    %s = arith.index_cast %s : index to %s\n", ivCast, ivSSA, ivTy)
 			bodyEnv.bindValue(ivName, ivCast, ivTy)
 		}
-		bodyText, bodyTerm := emitFormalRegionBlock(bodyStmts, bodyEnv)
+		bodyText, _, bodyTerm := emitFormalLoopBody(bodyStmts, bodyEnv, "", "")
 		syncFormalTempID(env, bodyEnv)
 		if bodyTerm {
 			return buf.String() + "    go.todo \"ForStmt_returning_body\"\n"
@@ -524,12 +447,11 @@ func emitFormalForStmt(s *ast.ForStmt, env *formalEnv) string {
 		bodyEnv.bindValue(ivName, ivCast, ivTy)
 	}
 	bodyEnv.bindValue(carriedName, iterSSA, carriedTy)
-	bodyText, bodyTerm := emitFormalRegionBlock(bodyStmts, bodyEnv)
+	bodyText, yieldValue, bodyTerm := emitFormalLoopBody(bodyStmts, bodyEnv, carriedName, carriedTy)
 	syncFormalTempID(env, bodyEnv)
 	if bodyTerm {
 		return buf.String() + "    go.todo \"ForStmt_returning_body\"\n"
 	}
-	yieldValue := bodyEnv.use(carriedName)
 	buf.WriteString(fmt.Sprintf("    %s = scf.for %s = %s to %s step %s iter_args(%s = %s) -> (%s) {\n", result, ivSSA, lowerValue, upperValue, step, iterSSA, env.use(carriedName), carriedTy))
 	buf.WriteString(indentBlock(bodyPrelude, 2))
 	buf.WriteString(indentBlock(bodyText, 2))
@@ -540,6 +462,154 @@ func emitFormalForStmt(s *ast.ForStmt, env *formalEnv) string {
 	buf.WriteString(exitPrelude)
 	env.bindValue(ivName, exitIV, ivTy)
 	return buf.String()
+}
+
+func emitFormalRangeStmt(s *ast.RangeStmt, env *formalEnv) string {
+	if s.Tok != token.DEFINE && s.Tok != token.ASSIGN {
+		return "    go.todo \"RangeStmt\"\n"
+	}
+
+	source, sourceTy, sourcePrelude := emitFormalExpr(s.X, "", env)
+	lengthTmp, lengthPrelude, ok := emitFormalGoLenValue(source, sourceTy, "i32", "rangelen", env)
+	if !ok {
+		lengthTmp, lengthPrelude = emitFormalHelperCall(
+			formalHelperCallSpec{
+				base:       "__mlse_range_len_" + sanitizeName(sourceTy),
+				args:       []string{source},
+				argTys:     []string{sourceTy},
+				resultTy:   "i32",
+				tempPrefix: "rangelen",
+			},
+			env,
+		)
+	}
+
+	lower := env.temp("idx")
+	upper := env.temp("idx")
+	step := env.temp("const")
+	ivSSA := env.temp("range_iv")
+	var buf strings.Builder
+	buf.WriteString(sourcePrelude)
+	buf.WriteString(lengthPrelude)
+	buf.WriteString(fmt.Sprintf("    %s = arith.constant 0 : index\n", lower))
+	buf.WriteString(fmt.Sprintf("    %s = arith.index_cast %s : i32 to index\n", upper, lengthTmp))
+	buf.WriteString(fmt.Sprintf("    %s = arith.constant 1 : index\n", step))
+
+	keyName := rangeKeyName(s.Key)
+	valueName := rangeKeyName(s.Value)
+	excludes := make(map[string]struct{})
+	for _, name := range []string{keyName, valueName} {
+		if name != "" {
+			excludes[name] = struct{}{}
+		}
+	}
+	carried := collectAssignedOuterNamesWithExcludes(s.Body.List, env, excludes)
+	if len(carried) > 1 {
+		return buf.String() + "    go.todo \"RangeStmt_multi_iter_args\"\n"
+	}
+
+	if len(carried) == 0 {
+		bodyEnv := env.clone()
+		bodyPrelude := emitFormalRangeBindings(s, source, sourceTy, ivSSA, bodyEnv)
+		bodyText, _, bodyTerm := emitFormalLoopBody(s.Body.List, bodyEnv, "", "")
+		syncFormalTempID(env, bodyEnv)
+		if bodyTerm {
+			return buf.String() + "    go.todo \"RangeStmt_returning_body\"\n"
+		}
+		buf.WriteString(fmt.Sprintf("    scf.for %s = %s to %s step %s {\n", ivSSA, lower, upper, step))
+		buf.WriteString(indentBlock(bodyPrelude, 2))
+		buf.WriteString(indentBlock(bodyText, 2))
+		buf.WriteString("    }\n")
+		return buf.String()
+	}
+
+	carriedName := carried[0]
+	carriedTy := env.typeOf(carriedName)
+	iterSSA := fmt.Sprintf("%%%s_iter", sanitizeName(carriedName))
+	result := env.temp("range")
+	bodyEnv := env.clone()
+	bodyEnv.bindValue(carriedName, iterSSA, carriedTy)
+	bodyPrelude := emitFormalRangeBindings(s, source, sourceTy, ivSSA, bodyEnv)
+	bodyText, yieldValue, bodyTerm := emitFormalLoopBody(s.Body.List, bodyEnv, carriedName, carriedTy)
+	syncFormalTempID(env, bodyEnv)
+	if bodyTerm {
+		return buf.String() + "    go.todo \"RangeStmt_returning_body\"\n"
+	}
+	buf.WriteString(fmt.Sprintf("    %s = scf.for %s = %s to %s step %s iter_args(%s = %s) -> (%s) {\n", result, ivSSA, lower, upper, step, iterSSA, env.use(carriedName), carriedTy))
+	buf.WriteString(indentBlock(bodyPrelude, 2))
+	buf.WriteString(indentBlock(bodyText, 2))
+	buf.WriteString(fmt.Sprintf("        scf.yield %s : %s\n", yieldValue, carriedTy))
+	buf.WriteString("    }\n")
+	env.bindValue(carriedName, result, carriedTy)
+	return buf.String()
+}
+
+func emitFormalRangeBindings(s *ast.RangeStmt, source string, sourceTy string, ivSSA string, env *formalEnv) string {
+	var buf strings.Builder
+	indexValue := ivSSA
+	indexTy := "index"
+	if keyName := rangeKeyName(s.Key); keyName != "" {
+		keyTy := "i32"
+		if s.Tok == token.ASSIGN {
+			keyTy = chooseFormalCommonType(env.typeOf(keyName), "i32")
+		}
+		boundIndex := indexValue
+		if keyTy != "index" {
+			cast := env.temp("range_idx")
+			buf.WriteString(fmt.Sprintf("    %s = arith.index_cast %s : index to %s\n", cast, ivSSA, keyTy))
+			boundIndex = cast
+			indexTy = keyTy
+		}
+		if s.Tok == token.DEFINE {
+			env.defineOrAssign(keyName, keyTy)
+		} else {
+			env.assign(keyName, keyTy)
+		}
+		env.bindValue(keyName, boundIndex, keyTy)
+	}
+	if valueName := rangeKeyName(s.Value); valueName != "" {
+		valueTy := inferFormalRangeValueType(valueName, sourceTy, s.Body, env)
+		indexArg := indexValue
+		if indexTy != "index" {
+			indexArg = ivSSA
+		}
+		valueTmp, _, valuePrelude, ok := emitFormalIndexedReadValue(formalGoIndexSpec{
+			source:     source,
+			sourceTy:   sourceTy,
+			index:      indexArg,
+			indexTy:    "index",
+			hintedTy:   valueTy,
+			tempPrefix: "rangeval",
+		}, env)
+		if !ok {
+			valueTmp, valuePrelude = emitFormalHelperCall(
+				formalHelperCallSpec{
+					base:       "__mlse_index_" + sanitizeName(sourceTy),
+					args:       []string{source, indexArg},
+					argTys:     []string{sourceTy, "index"},
+					resultTy:   valueTy,
+					tempPrefix: "rangeval",
+				},
+				env,
+			)
+		}
+		buf.WriteString(valuePrelude)
+		if s.Tok == token.DEFINE {
+			env.defineOrAssign(valueName, valueTy)
+		} else {
+			env.assign(valueName, valueTy)
+		}
+		env.bindValue(valueName, valueTmp, valueTy)
+	}
+	return buf.String()
+}
+
+func rangeKeyName(expr ast.Expr) string {
+	ident, ok := expr.(*ast.Ident)
+	if !ok || ident.Name == "_" {
+		return ""
+	}
+	return ident.Name
 }
 
 func emitFormalIncDecStmt(s *ast.IncDecStmt, env *formalEnv) string {
@@ -563,13 +633,258 @@ func emitFormalIncDecStmt(s *ast.IncDecStmt, env *formalEnv) string {
 	return fmt.Sprintf("    %s = arith.constant 1 : %s\n    %s = %s %s, %s : %s\n", step, ty, next, op, name, step, ty)
 }
 
+func emitFormalHelperCall(spec formalHelperCallSpec, env *formalEnv) (string, string) {
+	resultTy := normalizeFormalType(spec.resultTy)
+	symbol := env.module.registerExtern(spec.base, spec.argTys, []string{resultTy})
+	tmp := env.temp(spec.tempPrefix)
+	return tmp, fmt.Sprintf("    %s = func.call @%s(%s) : (%s) -> %s\n", tmp, symbol, strings.Join(spec.args, ", "), strings.Join(spec.argTys, ", "), resultTy)
+}
+
+func isFormalOpaquePlaceholderType(ty string) bool {
+	ty = normalizeFormalType(ty)
+	return ty == formalOpaqueType("value") || ty == formalOpaqueType("result")
+}
+
+func chooseFormalCommonType(lhsTy string, rhsTy string) string {
+	lhsTy = normalizeFormalType(lhsTy)
+	rhsTy = normalizeFormalType(rhsTy)
+	switch {
+	case isFormalOpaquePlaceholderType(lhsTy) && !isFormalOpaquePlaceholderType(rhsTy):
+		return rhsTy
+	case isFormalOpaquePlaceholderType(rhsTy) && !isFormalOpaquePlaceholderType(lhsTy):
+		return lhsTy
+	case lhsTy == rhsTy:
+		return lhsTy
+	case lhsTy == formalOpaqueType("value"):
+		return rhsTy
+	case rhsTy == formalOpaqueType("value"):
+		return lhsTy
+	default:
+		return lhsTy
+	}
+}
+
+func formalIndexResultType(containerTy string) string {
+	containerTy = normalizeFormalType(containerTy)
+	if strings.HasPrefix(containerTy, "!go.slice<") && strings.HasSuffix(containerTy, ">") {
+		return strings.TrimSuffix(strings.TrimPrefix(containerTy, "!go.slice<"), ">")
+	}
+	if containerTy == "!go.string" {
+		return "i8"
+	}
+	return formalOpaqueType("value")
+}
+
+func formalIndexOperandHint(containerTy string) string {
+	if isFormalIndexLikeType(containerTy) {
+		return "i32"
+	}
+	return ""
+}
+
+func formalFuncSigFromType(fnType *ast.FuncType, module *formalModuleContext) formalFuncSig {
+	if fnType == nil {
+		return formalFuncSig{}
+	}
+	return formalFuncSig{
+		params:  emitFieldTypes(fnType.Params, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+		results: emitFieldTypes(fnType.Results, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+	}
+}
+
+func formalFuncSigFromDecl(fn *ast.FuncDecl, module *formalModuleContext) formalFuncSig {
+	if fn == nil {
+		return formalFuncSig{}
+	}
+	return formalFuncSig{
+		params:  emitFieldTypes(formalJoinFieldLists(fn.Recv, fn.Type.Params), func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+		results: emitFieldTypes(fn.Type.Results, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+	}
+}
+
+func emitFormalFuncLitExpr(lit *ast.FuncLit, hintedTy string, env *formalEnv) (string, string, string) {
+	funcTy := formalTypeExprToMLIR(lit.Type, env.module)
+	if funcTy == formalOpaqueType("func") {
+		funcTy = normalizeFormalType(hintedTy)
+	}
+	sig, ok := parseFormalFuncType(funcTy)
+	if !ok {
+		return emitFormalTodoValue("FuncLit_type", normalizeFormalType(hintedTy), env)
+	}
+
+	captures := formalFuncLitCaptures(lit, env)
+	if len(captures) != 0 {
+		return emitFormalTodoValue("FuncLit_capture", funcTy, env)
+	}
+
+	symbol := env.module.reserveFuncLitSymbol(sig, env.currentFunc)
+	env.module.addGeneratedFunc(emitFormalFuncBody(formalFuncBodySpec{
+		name:    symbol,
+		fnType:  lit.Type,
+		body:    lit.Body,
+		private: true,
+	}, env.module))
+
+	tmp := env.temp("funclit")
+	return tmp, funcTy, fmt.Sprintf("    %s = func.constant @%s : %s\n", tmp, symbol, funcTy)
+}
+
+func formalFuncLitCaptures(lit *ast.FuncLit, env *formalEnv) []string {
+	if lit == nil || env == nil {
+		return nil
+	}
+
+	localNames := collectFormalFuncLocalNames(lit.Type, lit.Body)
+	seen := make(map[string]struct{})
+	var stack []ast.Node
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		parent := ast.Node(nil)
+		if len(stack) != 0 {
+			parent = stack[len(stack)-1]
+		}
+		stack = append(stack, n)
+
+		ident, ok := n.(*ast.Ident)
+		if !ok || ident.Name == "_" {
+			return true
+		}
+		if isFormalDefinitionIdent(parent, ident) {
+			return true
+		}
+		if _, ok := localNames[ident.Name]; ok {
+			return true
+		}
+		if _, ok := env.locals[ident.Name]; ok {
+			seen[ident.Name] = struct{}{}
+		}
+		return true
+	})
+
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func collectFormalFuncLocalNames(fnType *ast.FuncType, body *ast.BlockStmt) map[string]struct{} {
+	names := make(map[string]struct{})
+	collectFormalFieldNames(names, fnType.Params)
+	collectFormalFieldNames(names, fnType.Results)
+	if body == nil {
+		return names
+	}
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case nil:
+			return false
+		case *ast.FuncLit:
+			return false
+		case *ast.AssignStmt:
+			if node.Tok == token.DEFINE {
+				for _, lhs := range node.Lhs {
+					ident, ok := lhs.(*ast.Ident)
+					if ok && ident.Name != "_" {
+						names[ident.Name] = struct{}{}
+					}
+				}
+			}
+		case *ast.RangeStmt:
+			if node.Tok == token.DEFINE {
+				if ident, ok := node.Key.(*ast.Ident); ok && ident.Name != "_" {
+					names[ident.Name] = struct{}{}
+				}
+				if ident, ok := node.Value.(*ast.Ident); ok && ident.Name != "_" {
+					names[ident.Name] = struct{}{}
+				}
+			}
+		case *ast.DeclStmt:
+			gen, ok := node.Decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				return true
+			}
+			for _, spec := range gen.Specs {
+				valueSpec, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, name := range valueSpec.Names {
+					if name.Name != "_" {
+						names[name.Name] = struct{}{}
+					}
+				}
+			}
+		}
+		return true
+	})
+	return names
+}
+
+func collectFormalFieldNames(out map[string]struct{}, fields *ast.FieldList) {
+	if fields == nil {
+		return
+	}
+	for _, field := range fields.List {
+		for _, name := range field.Names {
+			if name.Name != "_" {
+				out[name.Name] = struct{}{}
+			}
+		}
+	}
+}
+
+func isFormalDefinitionIdent(parent ast.Node, ident *ast.Ident) bool {
+	switch node := parent.(type) {
+	case *ast.AssignStmt:
+		if node.Tok != token.DEFINE {
+			return false
+		}
+		for _, lhs := range node.Lhs {
+			if lhs == ident {
+				return true
+			}
+		}
+	case *ast.Field:
+		for _, name := range node.Names {
+			if name == ident {
+				return true
+			}
+		}
+	case *ast.ValueSpec:
+		for _, name := range node.Names {
+			if name == ident {
+				return true
+			}
+		}
+	case *ast.RangeStmt:
+		return (node.Key == ident || node.Value == ident) && node.Tok == token.DEFINE
+	case *ast.SelectorExpr:
+		return node.Sel == ident
+	}
+	return false
+}
+
+// emitFormalExpr dispatches expression nodes while threading type hints through lowering.
 func emitFormalExpr(expr ast.Expr, hintedTy string, env *formalEnv) (string, string, string) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		switch e.Kind {
 		case token.INT:
+			litTy := "i32"
+			if isFormalIntegerType(hintedTy) {
+				litTy = normalizeFormalType(hintedTy)
+			}
 			tmp := env.temp("const")
-			return tmp, "i32", fmt.Sprintf("    %s = arith.constant %s : i32\n", tmp, e.Value)
+			return tmp, litTy, fmt.Sprintf("    %s = arith.constant %s : %s\n", tmp, e.Value, litTy)
 		case token.STRING:
 			tmp := env.temp("str")
 			quoted := strconv.Quote(strings.Trim(e.Value, "\"`"))
@@ -581,8 +896,12 @@ func emitFormalExpr(expr ast.Expr, hintedTy string, env *formalEnv) (string, str
 		switch e.Name {
 		case "nil":
 			ty := normalizeFormalType(hintedTy)
-			if !isFormalNilableType(ty) {
+			if hintedTy == "" {
 				ty = "!go.error"
+			}
+			if !isFormalNilableType(ty) {
+				value, prelude := emitFormalZeroValue(ty, env)
+				return value, ty, prelude
 			}
 			tmp := env.temp("nil")
 			return tmp, ty, fmt.Sprintf("    %s = go.nil : %s\n", tmp, ty)
@@ -590,14 +909,48 @@ func emitFormalExpr(expr ast.Expr, hintedTy string, env *formalEnv) (string, str
 			tmp := env.temp("const")
 			return tmp, "i1", fmt.Sprintf("    %s = arith.constant %s\n", tmp, e.Name)
 		default:
-			return env.use(e.Name), env.typeOf(e.Name), ""
+			if _, ok := env.locals[e.Name]; ok {
+				return env.use(e.Name), env.typeOf(e.Name), ""
+			}
+			if env.module != nil {
+				symbol := env.module.topLevelSymbol(e.Name)
+				if sig, ok := env.module.definedFuncs[symbol]; ok {
+					funcTy := formatFormalFuncType(sig.params, sig.results)
+					tmp := env.temp("fn")
+					return tmp, funcTy, fmt.Sprintf("    %s = func.constant @%s : %s\n", tmp, symbol, funcTy)
+				}
+			}
+			ty := env.typeOf(e.Name)
+			if env.module != nil {
+				if typedTy, ok := formalTypedExprType(e, env.module); ok && isFormalTypedInfoUsableType(typedTy) {
+					ty = typedTy
+				}
+			}
+			tmp, prelude := emitFormalHelperCall(formalHelperCallSpec{
+				base:       e.Name,
+				resultTy:   ty,
+				tempPrefix: "global",
+			}, env)
+			return tmp, ty, prelude
 		}
 	case *ast.BinaryExpr:
 		return emitFormalBinaryExpr(e, hintedTy, env)
 	case *ast.CallExpr:
 		return emitFormalCallExpr(e, hintedTy, env)
+	case *ast.CompositeLit:
+		return emitFormalCompositeLitExpr(e, hintedTy, env)
+	case *ast.FuncLit:
+		return emitFormalFuncLitExpr(e, hintedTy, env)
+	case *ast.IndexExpr:
+		return emitFormalIndexExpr(e, hintedTy, env)
 	case *ast.ParenExpr:
 		return emitFormalExpr(e.X, hintedTy, env)
+	case *ast.SelectorExpr:
+		return emitFormalSelectorExpr(e, hintedTy, env)
+	case *ast.StarExpr:
+		return emitFormalStarExpr(e, hintedTy, env)
+	case *ast.TypeAssertExpr:
+		return emitFormalTypeAssertExpr(e, hintedTy, env)
 	case *ast.UnaryExpr:
 		return emitFormalUnaryExpr(e, hintedTy, env)
 	default:
@@ -605,9 +958,86 @@ func emitFormalExpr(expr ast.Expr, hintedTy string, env *formalEnv) (string, str
 	}
 }
 
+func emitFormalIndexExpr(expr *ast.IndexExpr, hintedTy string, env *formalEnv) (string, string, string) {
+	source, sourceTy, sourcePrelude := emitFormalExpr(expr.X, "", env)
+	indexHint := formalIndexOperandHint(sourceTy)
+	index, indexTy, indexPrelude := emitFormalExpr(expr.Index, indexHint, env)
+	if tmp, elementTy, opText, ok := emitFormalIndexedReadValue(formalGoIndexSpec{
+		source:     source,
+		sourceTy:   sourceTy,
+		index:      index,
+		indexTy:    indexTy,
+		hintedTy:   hintedTy,
+		tempPrefix: "index",
+	}, env); ok {
+		return tmp, elementTy, sourcePrelude + indexPrelude + opText
+	}
+	elementTy := normalizeFormalType(hintedTy)
+	if isFormalOpaquePlaceholderType(elementTy) {
+		elementTy = formalIndexResultType(sourceTy)
+	}
+	tmp, helperPrelude := emitFormalHelperCall(
+		formalHelperCallSpec{
+			base:       "__mlse_index_" + sanitizeName(sourceTy),
+			args:       []string{source, index},
+			argTys:     []string{sourceTy, indexTy},
+			resultTy:   elementTy,
+			tempPrefix: "index",
+		},
+		env,
+	)
+	return tmp, elementTy, sourcePrelude + indexPrelude + helperPrelude
+}
+
+func emitFormalSelectorExpr(expr *ast.SelectorExpr, hintedTy string, env *formalEnv) (string, string, string) {
+	ty := formalSelectorResultType(expr, hintedTy, env)
+	if sig, ok := parseFormalFuncType(ty); ok {
+		symbol := formalCallSymbol(expr, sig.params, sig.results, env.module)
+		if symbol == "" {
+			return emitFormalTodoValue("SelectorExpr", ty, env)
+		}
+		tmp := env.temp("sel")
+		return tmp, ty, fmt.Sprintf("    %s = func.constant @%s : %s\n", tmp, symbol, ty)
+	}
+
+	if isFormalPackageSelector(expr, env) {
+		tmp, prelude := emitFormalHelperCall(formalHelperCallSpec{
+			base:       formalPackageSelectorSymbol(expr, env.module),
+			resultTy:   ty,
+			tempPrefix: "sel",
+		}, env)
+		return tmp, ty, prelude
+	}
+
+	base, baseTy, basePrelude := emitFormalExpr(expr.X, "", env)
+	fieldAddr, fieldAddrTy, fieldAddrPrelude, ok := emitFormalFieldAddr(base, baseTy, expr.Sel.Name, ty, env)
+	if ok {
+		tmp, loadedTy, loadPrelude, loadOK := emitFormalLoad(fieldAddr, fieldAddrTy, ty, env)
+		if loadOK {
+			return tmp, loadedTy, basePrelude + fieldAddrPrelude + loadPrelude
+		}
+	}
+	tmp, helperPrelude := emitFormalHelperCall(
+		formalHelperCallSpec{
+			base:       "__mlse_selector_" + sanitizeName(expr.Sel.Name),
+			args:       []string{base},
+			argTys:     []string{baseTy},
+			resultTy:   ty,
+			tempPrefix: "sel",
+		},
+		env,
+	)
+	return tmp, ty, basePrelude + helperPrelude
+}
+
 func emitFormalBinaryExpr(expr *ast.BinaryExpr, hintedTy string, env *formalEnv) (string, string, string) {
-	lhs, lhsTy, lhsPrelude := emitFormalExpr(expr.X, "", env)
-	rhs, rhsTy, rhsPrelude := emitFormalExpr(expr.Y, lhsTy, env)
+	operandHint := formalBinaryOperandHint(expr, env)
+	lhs, lhsTy, lhsPrelude := emitFormalExpr(expr.X, operandHint, env)
+	rhsHint := operandHint
+	if isFormalOpaquePlaceholderType(rhsHint) && !isFormalOpaquePlaceholderType(lhsTy) {
+		rhsHint = lhsTy
+	}
+	rhs, rhsTy, rhsPrelude := emitFormalExpr(expr.Y, rhsHint, env)
 	operandTy := lhsTy
 	if operandTy == "" || operandTy == formalOpaqueType("value") {
 		operandTy = rhsTy
@@ -653,8 +1083,85 @@ func emitFormalBinaryExpr(expr *ast.BinaryExpr, hintedTy string, env *formalEnv)
 		return emitFormalTodoValue("binary_"+sanitizeName(expr.Op.String()), normalizeFormalType(hintedTy), env)
 	}
 
+	operandTy = chooseFormalCommonType(lhsTy, rhsTy)
+	if isFormalNilExpr(expr.X) {
+		operandTy = normalizeFormalType(rhsTy)
+	}
+	if isFormalNilExpr(expr.Y) {
+		operandTy = normalizeFormalType(lhsTy)
+	}
 	if !isFormalIntegerType(operandTy) && operandTy != "i1" {
-		return emitFormalTodoValue("binary_"+sanitizeName(expr.Op.String()), normalizeFormalType(hintedTy), env)
+		if expr.Op == token.ADD && operandTy == "!go.string" {
+			tmp, helperPrelude := emitFormalHelperCall(
+				formalHelperCallSpec{
+					base:       "__mlse_add__go.string",
+					args:       []string{lhs, rhs},
+					argTys:     []string{operandTy, operandTy},
+					resultTy:   operandTy,
+					tempPrefix: "add",
+				},
+				env,
+			)
+			return tmp, operandTy, lhsPrelude + rhsPrelude + helperPrelude
+		}
+		if expr.Op == token.EQL || expr.Op == token.NEQ {
+			if supportsFormalGoCompareOp(expr, operandTy) {
+				return emitFormalGoCompare(
+					formalGoCompareSpec{
+						op:         expr.Op,
+						lhs:        lhs,
+						rhs:        rhs,
+						operandTy:  operandTy,
+						lhsPrelude: lhsPrelude,
+						rhsPrelude: rhsPrelude,
+					},
+					env,
+				)
+			}
+			helperBase := "__mlse_eq_" + sanitizeName(operandTy)
+			if expr.Op == token.NEQ {
+				helperBase = "__mlse_neq_" + sanitizeName(operandTy)
+			}
+			tmp, helperPrelude := emitFormalHelperCall(
+				formalHelperCallSpec{
+					base:       helperBase,
+					args:       []string{lhs, rhs},
+					argTys:     []string{operandTy, operandTy},
+					resultTy:   "i1",
+					tempPrefix: "cmp",
+				},
+				env,
+			)
+			return tmp, "i1", lhsPrelude + rhsPrelude + helperPrelude
+		}
+		if coercedLHS, _, coercedPrelude, ok := emitFormalCoerceValue(lhs, lhsTy, operandTy, env); ok {
+			lhs = coercedLHS
+			lhsPrelude += coercedPrelude
+		}
+		if coercedRHS, _, coercedPrelude, ok := emitFormalCoerceValue(rhs, rhsTy, operandTy, env); ok {
+			rhs = coercedRHS
+			rhsPrelude += coercedPrelude
+		}
+		tmp, helperPrelude := emitFormalHelperCall(
+			formalHelperCallSpec{
+				base:       "__mlse_bin_" + sanitizeName(expr.Op.String()) + "__" + sanitizeName(operandTy),
+				args:       []string{lhs, rhs},
+				argTys:     []string{operandTy, operandTy},
+				resultTy:   normalizeFormalType(resultTy),
+				tempPrefix: "bin",
+			},
+			env,
+		)
+		return tmp, normalizeFormalType(resultTy), lhsPrelude + rhsPrelude + helperPrelude
+	}
+
+	if coercedLHS, _, coercedPrelude, ok := emitFormalCoerceValue(lhs, lhsTy, operandTy, env); ok {
+		lhs = coercedLHS
+		lhsPrelude += coercedPrelude
+	}
+	if coercedRHS, _, coercedPrelude, ok := emitFormalCoerceValue(rhs, rhsTy, operandTy, env); ok {
+		rhs = coercedRHS
+		rhsPrelude += coercedPrelude
 	}
 
 	tmp := env.temp("bin")
@@ -669,56 +1176,212 @@ func emitFormalBinaryExpr(expr *ast.BinaryExpr, hintedTy string, env *formalEnv)
 	return tmp, resultTy, buf.String()
 }
 
+func emitFormalGoCompare(spec formalGoCompareSpec, env *formalEnv) (string, string, string) {
+	tmp := env.temp("cmp")
+	mnemonic := "go.eq"
+	if spec.op == token.NEQ {
+		mnemonic = "go.neq"
+	}
+	var buf strings.Builder
+	buf.WriteString(spec.lhsPrelude)
+	buf.WriteString(spec.rhsPrelude)
+	buf.WriteString(fmt.Sprintf(
+		"    %s = %s %s, %s : (%s, %s) -> i1\n",
+		tmp, mnemonic, spec.lhs, spec.rhs, spec.operandTy, spec.operandTy,
+	))
+	return tmp, "i1", buf.String()
+}
+
+func supportsFormalGoCompareOp(expr *ast.BinaryExpr, operandTy string) bool {
+	operandTy = normalizeFormalType(operandTy)
+	switch {
+	case isFormalStringType(operandTy):
+		return true
+	case isFormalPointerType(operandTy):
+		return true
+	case isFormalSliceType(operandTy):
+		return isFormalNilExpr(expr.X) || isFormalNilExpr(expr.Y)
+	case operandTy == "!go.error":
+		return isFormalNilExpr(expr.X) || isFormalNilExpr(expr.Y)
+	default:
+		return false
+	}
+}
+
+func formalBinaryOperandHint(expr *ast.BinaryExpr, env *formalEnv) string {
+	switch expr.Op {
+	case token.LAND, token.LOR:
+		return "i1"
+	}
+	if isFormalNilExpr(expr.X) {
+		return normalizeFormalType(inferFormalExprType(expr.Y, env))
+	}
+	if isFormalNilExpr(expr.Y) {
+		return normalizeFormalType(inferFormalExprType(expr.X, env))
+	}
+
+	lhsTy := inferFormalExprType(expr.X, env)
+	rhsTy := inferFormalExprType(expr.Y, env)
+	hint := chooseFormalCommonType(lhsTy, rhsTy)
+	if !isFormalOpaquePlaceholderType(hint) {
+		return hint
+	}
+	if !isFormalOpaquePlaceholderType(normalizeFormalType(lhsTy)) {
+		return normalizeFormalType(lhsTy)
+	}
+	if !isFormalOpaquePlaceholderType(normalizeFormalType(rhsTy)) {
+		return normalizeFormalType(rhsTy)
+	}
+	return hint
+}
+
+func isFormalNilExpr(expr ast.Expr) bool {
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.Name == "nil"
+}
+
+func emitFormalCallOperands(args []ast.Expr, env *formalEnv) ([]string, []string, string) {
+	return emitFormalCallOperandsWithHints(args, nil, env)
+}
+
+func emitFormalCallOperandsWithHints(args []ast.Expr, hints []string, env *formalEnv) ([]string, []string, string) {
+	var (
+		values []string
+		types  []string
+		buf    strings.Builder
+	)
+	for i, arg := range args {
+		hint := ""
+		if i < len(hints) {
+			hint = hints[i]
+		}
+		value, ty, prelude := emitFormalExpr(arg, hint, env)
+		buf.WriteString(prelude)
+		values = append(values, value)
+		types = append(types, ty)
+	}
+	return values, types, buf.String()
+}
+
+func formalDirectCallSymbol(expr ast.Expr, argTys []string, resultTys []string, env *formalEnv) (string, bool) {
+	switch callee := expr.(type) {
+	case *ast.Ident:
+		if env != nil {
+			if _, ok := env.locals[callee.Name]; ok {
+				return "", false
+			}
+		}
+	case *ast.SelectorExpr:
+		if !isFormalPackageSelector(callee, env) {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+
+	symbol := formalCallSymbol(expr, argTys, resultTys, env.module)
+	return symbol, symbol != ""
+}
+
+func formalExprFuncSig(expr ast.Expr, env *formalEnv) (formalFuncSig, bool) {
+	if env != nil && env.module != nil {
+		if sig, ok := formalTypedExprFuncSig(expr, env.module); ok {
+			return sig, true
+		}
+	}
+	switch e := expr.(type) {
+	case *ast.Ident:
+		if env != nil {
+			if binding, ok := env.locals[e.Name]; ok && binding.funcSig != nil {
+				return *binding.funcSig, true
+			}
+		}
+		if env != nil && env.module != nil {
+			if sig, ok := env.module.definedFuncs[env.module.topLevelSymbol(e.Name)]; ok {
+				return sig, true
+			}
+		}
+	case *ast.SelectorExpr:
+		if env != nil && !isFormalPackageSelector(e, env) && env.module != nil {
+			if symbol := formalMethodObjectSymbol(e, env.module); symbol != "" {
+				if sig, ok := env.module.definedFuncs[symbol]; ok {
+					return sig, true
+				}
+			}
+			if sig, ok := env.module.definedFuncs[env.module.methodSymbol(e.Sel.Name)]; ok {
+				return sig, true
+			}
+		}
+	case *ast.FuncLit:
+		return formalFuncSigFromType(e.Type, env.module), true
+	}
+	return parseFormalFuncType(inferFormalExprType(expr, env))
+}
+
 func emitFormalCallExpr(call *ast.CallExpr, hintedTy string, env *formalEnv) (string, string, string) {
 	if isMakeBuiltin(call) {
 		return emitFormalMakeCall(call, env)
 	}
-	if isTypeExpr(call.Fun) && len(call.Args) == 1 {
-		targetTy := goTypeToFormalMLIR(call.Fun)
+	if value, ty, prelude, ok := emitFormalBuiltinCall(call, hintedTy, env); ok {
+		return value, ty, prelude
+	}
+	if isFormalTypeConversionCall(call, env.module) {
+		targetTy := formalTypeExprToMLIR(call.Fun, env.module)
 		value, valueTy, prelude := emitFormalExpr(call.Args[0], targetTy, env)
-		if valueTy == targetTy {
-			return value, targetTy, prelude
+		if coercedValue, coercedTy, coercedPrelude, ok := emitFormalCoerceValue(value, valueTy, targetTy, env); ok {
+			return coercedValue, coercedTy, prelude + coercedPrelude
 		}
 		todoValue, todoTy, todoPrelude := emitFormalTodoValue("type_conversion", targetTy, env)
 		return todoValue, todoTy, prelude + todoPrelude
 	}
 
-	callee := formalCalleeName(call.Fun)
-	if callee == "" {
-		return emitFormalTodoValue("indirect_call", normalizeFormalType(hintedTy), env)
+	argHints := []string(nil)
+	if sig, ok := formalExprFuncSig(call.Fun, env); ok && len(sig.params) == len(call.Args) {
+		argHints = sig.params
 	}
-
-	var (
-		args   []string
-		argTys []string
-		buf    strings.Builder
-	)
-	for _, arg := range call.Args {
-		value, ty, prelude := emitFormalExpr(arg, "", env)
-		buf.WriteString(prelude)
-		args = append(args, value)
-		argTys = append(argTys, ty)
+	if value, ty, prelude, ok := emitFormalMethodCallExpr(call, hintedTy, env, argHints); ok {
+		return value, ty, prelude
 	}
+	args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args, argHints, env)
+	var buf strings.Builder
+	buf.WriteString(prelude)
 
 	resultTy := inferFormalCallResultType(call, hintedTy, env)
+	if symbol, ok := formalDirectCallSymbol(call.Fun, argTys, []string{resultTy}, env); ok {
+		tmp := env.temp("call")
+		buf.WriteString(fmt.Sprintf("    %s = func.call @%s(%s) : (%s) -> %s\n", tmp, symbol, strings.Join(args, ", "), strings.Join(argTys, ", "), resultTy))
+		return tmp, resultTy, buf.String()
+	}
+
+	sig, ok := formalExprFuncSig(call.Fun, env)
+	if !ok {
+		return emitFormalTodoValue("indirect_call", normalizeFormalType(hintedTy), env)
+	}
+	if len(sig.results) > 1 {
+		return emitFormalTodoValue("indirect_call_multi_result", normalizeFormalType(resultTy), env)
+	}
+
+	calleeTy := formatFormalFuncType(sig.params, sig.results)
+	calleeValue, _, calleePrelude := emitFormalExpr(call.Fun, calleeTy, env)
+	buf.WriteString(calleePrelude)
 	tmp := env.temp("call")
-	buf.WriteString(fmt.Sprintf("    %s = func.call @%s(%s) : (%s) -> %s\n", tmp, callee, strings.Join(args, ", "), strings.Join(argTys, ", "), resultTy))
+	buf.WriteString(fmt.Sprintf("    %s = func.call_indirect %s(%s) : (%s) -> %s\n", tmp, calleeValue, strings.Join(args, ", "), strings.Join(argTys, ", "), resultTy))
 	return tmp, resultTy, buf.String()
 }
 
 func emitFormalMakeCall(call *ast.CallExpr, env *formalEnv) (string, string, string) {
+	targetTy := formalTypeExprToMLIR(call.Args[0], env.module)
+	if !strings.HasPrefix(targetTy, "!go.slice<") {
+		return emitFormalHelperMakeCall(call.Args[1:], targetTy, env)
+	}
 	if len(call.Args) < 2 {
 		return emitFormalTodoValue("make_missing_len", formalOpaqueType("make"), env)
 	}
-	targetTy := goTypeToFormalMLIR(call.Args[0])
 	length, lengthTy, lengthPrelude := emitFormalExpr(call.Args[1], "i32", env)
 	capacity := length
 	capacityPrelude := ""
 	if len(call.Args) > 2 {
 		capacity, _, capacityPrelude = emitFormalExpr(call.Args[2], lengthTy, env)
-	}
-	if !strings.HasPrefix(targetTy, "!go.slice<") {
-		return emitFormalTodoValue("make_non_slice", targetTy, env)
 	}
 	tmp := env.temp("make")
 	var buf strings.Builder
@@ -738,6 +1401,46 @@ func emitFormalUnaryExpr(expr *ast.UnaryExpr, hintedTy string, env *formalEnv) (
 		zero, zeroPrelude := emitFormalZeroValue(ty, env)
 		tmp := env.temp("neg")
 		return tmp, ty, prelude + zeroPrelude + fmt.Sprintf("    %s = arith.subi %s, %s : %s\n", tmp, zero, value, ty)
+	case token.NOT:
+		value, ty, prelude := emitFormalExpr(expr.X, "i1", env)
+		if ty != "i1" {
+			return emitFormalTodoValue("unary_not", normalizeFormalType(hintedTy), env)
+		}
+		one := env.temp("const")
+		tmp := env.temp("not")
+		return tmp, "i1", prelude + fmt.Sprintf("    %s = arith.constant true\n    %s = arith.xori %s, %s : i1\n", one, tmp, value, one)
+	case token.AND:
+		if composite, ok := expr.X.(*ast.CompositeLit); ok {
+			resultTy := normalizeFormalType(hintedTy)
+			if isFormalOpaquePlaceholderType(resultTy) {
+				resultTy = "!go.ptr<" + goTypeToFormalMLIR(composite.Type) + ">"
+			}
+			tmp, prelude := emitFormalHelperCall(
+				formalHelperCallSpec{
+					base:       "__mlse_new_" + sanitizeName(resultTy),
+					resultTy:   resultTy,
+					tempPrefix: "new",
+				},
+				env,
+			)
+			return tmp, resultTy, prelude
+		}
+		value, ty, prelude := emitFormalExpr(expr.X, "", env)
+		resultTy := normalizeFormalType(hintedTy)
+		if isFormalOpaquePlaceholderType(resultTy) {
+			resultTy = "!go.ptr<" + ty + ">"
+		}
+		tmp, helperPrelude := emitFormalHelperCall(
+			formalHelperCallSpec{
+				base:       "__mlse_addrof_" + sanitizeName(ty),
+				args:       []string{value},
+				argTys:     []string{ty},
+				resultTy:   resultTy,
+				tempPrefix: "addr",
+			},
+			env,
+		)
+		return tmp, resultTy, prelude + helperPrelude
 	default:
 		return emitFormalTodoValue("unary_"+sanitizeName(expr.Op.String()), normalizeFormalType(hintedTy), env)
 	}
@@ -748,26 +1451,36 @@ func emitFormalCallStmt(call *ast.CallExpr, env *formalEnv) (string, bool) {
 		value, ty, prelude := emitFormalCallExpr(call, "", env)
 		return prelude + fmt.Sprintf("    go.todo %q\n", "discarded_"+sanitizeName(ty)+"_"+sanitizeName(value)), true
 	}
-	if isTypeExpr(call.Fun) {
+	if isFormalTypeConversionCall(call, env.module) {
 		return fmt.Sprintf("    go.todo %q\n", "type_conversion_stmt"), true
 	}
-	callee := formalCalleeName(call.Fun)
-	if callee == "" {
-		return fmt.Sprintf("    go.todo %q\n", "indirect_call_stmt"), true
+	argHints := []string(nil)
+	if sig, ok := formalExprFuncSig(call.Fun, env); ok && len(sig.params) == len(call.Args) {
+		argHints = sig.params
+	}
+	if text, ok := emitFormalMethodCallStmt(call, env, argHints); ok {
+		return text, true
+	}
+	args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args, argHints, env)
+	var buf strings.Builder
+	buf.WriteString(prelude)
+
+	if symbol, ok := formalDirectCallSymbol(call.Fun, argTys, nil, env); ok {
+		buf.WriteString(fmt.Sprintf("    func.call @%s(%s) : (%s) -> ()\n", symbol, strings.Join(args, ", "), strings.Join(argTys, ", ")))
+		return buf.String(), true
 	}
 
-	var (
-		args   []string
-		argTys []string
-		buf    strings.Builder
-	)
-	for _, arg := range call.Args {
-		value, ty, prelude := emitFormalExpr(arg, "", env)
-		buf.WriteString(prelude)
-		args = append(args, value)
-		argTys = append(argTys, ty)
+	sig, ok := formalExprFuncSig(call.Fun, env)
+	if !ok {
+		return fmt.Sprintf("    go.todo %q\n", "indirect_call_stmt"), true
 	}
-	buf.WriteString(fmt.Sprintf("    func.call @%s(%s) : (%s) -> ()\n", callee, strings.Join(args, ", "), strings.Join(argTys, ", ")))
+	if len(sig.results) != 0 {
+		return fmt.Sprintf("    go.todo %q\n", "discarded_call_result"), true
+	}
+	calleeTy := formatFormalFuncType(sig.params, sig.results)
+	calleeValue, _, calleePrelude := emitFormalExpr(call.Fun, calleeTy, env)
+	buf.WriteString(calleePrelude)
+	buf.WriteString(fmt.Sprintf("    func.call_indirect %s(%s) : (%s) -> ()\n", calleeValue, strings.Join(args, ", "), strings.Join(argTys, ", ")))
 	return buf.String(), true
 }
 
@@ -800,8 +1513,8 @@ func emitFormalTerminatingIfStmt(s *ast.IfStmt, next ast.Stmt, env *formalEnv, r
 		return "", 0, false, false
 	}
 
-	cond, condTy, prelude := emitFormalExpr(s.Cond, "i1", env)
-	if condTy != "i1" {
+	cond, prelude, ok := emitFormalCondition(s.Cond, env)
+	if !ok {
 		return "", 0, false, false
 	}
 
@@ -827,6 +1540,123 @@ func emitFormalTerminatingIfStmt(s *ast.IfStmt, next ast.Stmt, env *formalEnv, r
 	buf.WriteString(fmt.Sprintf("    return %s : %s\n", result, resultTy))
 	syncFormalTempID(env, thenEnv, elseEnv)
 	return buf.String(), consumed, true, true
+}
+
+func emitFormalReturningIfStmt(s *ast.IfStmt, remaining []ast.Stmt, env *formalEnv, resultTypes []string) (string, int, bool, bool) {
+	if len(resultTypes) == 0 {
+		return "", 0, false, false
+	}
+	body, values, types, consumed, ok := emitFormalReturningIfRegion(s, remaining, env, resultTypes)
+	if !ok {
+		return "", 0, false, false
+	}
+	return body + emitFormalReturnLine(values, types), consumed, true, true
+}
+
+func emitFormalReturningRegion(stmts []ast.Stmt, env *formalEnv, resultTypes []string) (string, []string, []string, bool) {
+	for i, stmt := range stmts {
+		attemptEnv := env.clone()
+		prefix, terminated := emitFormalRegionBlock(stmts[:i], attemptEnv)
+		if terminated {
+			syncFormalTempID(env, attemptEnv)
+			return "", nil, nil, false
+		}
+		if ifStmt, ok := stmt.(*ast.IfStmt); ok {
+			body, values, types, _, ok := emitFormalReturningIfRegion(ifStmt, stmts[i+1:], attemptEnv, resultTypes)
+			if ok {
+				syncFormalTempID(env, attemptEnv)
+				return prefix + body, values, types, true
+			}
+		}
+		body, values, types, _, ok := emitFormalReturningLoopRegion(stmt, stmts[i+1:], attemptEnv, resultTypes)
+		if ok {
+			syncFormalTempID(env, attemptEnv)
+			return prefix + body, values, types, true
+		}
+		syncFormalTempID(env, attemptEnv)
+	}
+	prefix, exprs, ok := extractTrailingReturnExprs(stmts)
+	if !ok {
+		return "", nil, nil, false
+	}
+	body, terminated := emitFormalRegionBlock(prefix, env)
+	if terminated {
+		return "", nil, nil, false
+	}
+	values, types, prelude, ok := emitFormalReturnExprOperands(exprs, resultTypes, env)
+	if !ok {
+		return "", nil, nil, false
+	}
+	return body + prelude, values, types, true
+}
+
+func emitFormalReturningIfRegion(s *ast.IfStmt, remaining []ast.Stmt, env *formalEnv, resultTypes []string) (string, []string, []string, int, bool) {
+	if s == nil {
+		return "", nil, nil, 0, false
+	}
+	if s.Init != nil {
+		scopedEnv := env.clone()
+		initText, term := emitFormalStmt(s.Init, scopedEnv, nil)
+		if term {
+			syncFormalTempID(env, scopedEnv)
+			return "", nil, nil, 0, false
+		}
+		clone := *s
+		clone.Init = nil
+		body, values, types, consumed, ok := emitFormalReturningIfRegion(&clone, remaining, scopedEnv, resultTypes)
+		if !ok {
+			syncFormalTempID(env, scopedEnv)
+			return "", nil, nil, 0, false
+		}
+		syncFormalTempID(env, scopedEnv)
+		return initText + body, values, types, consumed, true
+	}
+
+	elseStmts := remaining
+	consumed := len(remaining) + 1
+	if s.Else != nil {
+		elseBlock, ok := s.Else.(*ast.BlockStmt)
+		if !ok {
+			return "", nil, nil, 0, false
+		}
+		elseStmts = elseBlock.List
+		consumed = 1
+	}
+	if len(elseStmts) == 0 {
+		return "", nil, nil, 0, false
+	}
+
+	cond, prelude, ok := emitFormalCondition(s.Cond, env)
+	if !ok {
+		return "", nil, nil, 0, false
+	}
+
+	thenEnv := env.clone()
+	thenBody, thenValues, thenTypes, ok := emitFormalReturningRegion(s.Body.List, thenEnv, resultTypes)
+	if !ok {
+		syncFormalTempID(env, thenEnv)
+		return "", nil, nil, 0, false
+	}
+
+	elseEnv := env.clone()
+	elseBody, elseValues, elseTypes, ok := emitFormalReturningRegion(elseStmts, elseEnv, resultTypes)
+	if !ok {
+		syncFormalTempID(env, thenEnv, elseEnv)
+		return "", nil, nil, 0, false
+	}
+
+	result := env.temp("ifret")
+	var buf strings.Builder
+	buf.WriteString(prelude)
+	buf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), cond, strings.Join(resultTypes, ", ")))
+	buf.WriteString(indentBlock(thenBody, 2))
+	buf.WriteString(emitFormalYieldLine(thenValues, thenTypes))
+	buf.WriteString("    } else {\n")
+	buf.WriteString(indentBlock(elseBody, 2))
+	buf.WriteString(emitFormalYieldLine(elseValues, elseTypes))
+	buf.WriteString("    }\n")
+	syncFormalTempID(env, thenEnv, elseEnv)
+	return buf.String(), formalMultiResultRefs(result, len(resultTypes)), append([]string(nil), resultTypes...), consumed, true
 }
 
 func emitFormalFallbackReturn(resultTypes []string, env *formalEnv) string {
@@ -870,8 +1700,15 @@ func emitFormalZeroValue(ty string, env *formalEnv) (string, string) {
 		tmp := env.temp("nil")
 		return tmp, fmt.Sprintf("    %s = go.nil : %s\n", tmp, ty)
 	default:
-		value, _, prelude := emitFormalTodoValue("zero_value", ty, env)
-		return value, prelude
+		tmp, prelude := emitFormalHelperCall(
+			formalHelperCallSpec{
+				base:       "__mlse_zero_" + sanitizeName(ty),
+				resultTy:   ty,
+				tempPrefix: "zero",
+			},
+			env,
+		)
+		return tmp, prelude
 	}
 }
 
@@ -881,15 +1718,18 @@ func emitFormalTodoValue(reason string, ty string, env *formalEnv) (string, stri
 	return tmp, ty, fmt.Sprintf("    %s = go.todo_value %q : %s\n", tmp, reason, ty)
 }
 
-func extractSingleReturnExpr(stmts []ast.Stmt) (ast.Expr, bool) {
-	if len(stmts) != 1 {
-		return nil, false
+func syntheticFormalAssignType(name string, env *formalEnv) string {
+	if ty := env.typeOf(name); ty != formalOpaqueType("value") {
+		return ty
 	}
-	ret, ok := stmts[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) != 1 {
-		return nil, false
+	switch name {
+	case "ok", "found", "exists":
+		return "i1"
+	case "err":
+		return "!go.error"
+	default:
+		return formalOpaqueType("value")
 	}
-	return ret.Results[0], true
 }
 
 func formalMutatedOuterNames(base *formalEnv, thenEnv *formalEnv, elseEnv *formalEnv, hasElse bool) []string {
@@ -916,13 +1756,24 @@ func formalMutatedOuterNames(base *formalEnv, thenEnv *formalEnv, elseEnv *forma
 }
 
 func collectAssignedOuterNames(stmts []ast.Stmt, env *formalEnv, exclude string) []string {
+	excludes := make(map[string]struct{})
+	if exclude != "" {
+		excludes[exclude] = struct{}{}
+	}
+	return collectAssignedOuterNamesWithExcludes(stmts, env, excludes)
+}
+
+func collectAssignedOuterNamesWithExcludes(stmts []ast.Stmt, env *formalEnv, excludes map[string]struct{}) []string {
 	seen := make(map[string]struct{})
 	for _, stmt := range stmts {
 		switch s := stmt.(type) {
 		case *ast.AssignStmt:
 			for _, lhs := range s.Lhs {
 				ident, ok := lhs.(*ast.Ident)
-				if !ok || ident.Name == "_" || ident.Name == exclude {
+				if !ok || ident.Name == "_" {
+					continue
+				}
+				if _, skip := excludes[ident.Name]; skip {
 					continue
 				}
 				if _, ok := env.locals[ident.Name]; ok {
@@ -931,7 +1782,10 @@ func collectAssignedOuterNames(stmts []ast.Stmt, env *formalEnv, exclude string)
 			}
 		case *ast.IncDecStmt:
 			ident, ok := s.X.(*ast.Ident)
-			if !ok || ident.Name == "_" || ident.Name == exclude {
+			if !ok || ident.Name == "_" {
+				continue
+			}
+			if _, skip := excludes[ident.Name]; skip {
 				continue
 			}
 			if _, ok := env.locals[ident.Name]; ok {
@@ -988,6 +1842,11 @@ func isFormalLoopIncrement(stmt ast.Stmt, ivName string) bool {
 }
 
 func inferFormalExprType(expr ast.Expr, env *formalEnv) string {
+	if env != nil && env.module != nil {
+		if ty, ok := formalTypedExprType(expr, env.module); ok && isFormalTypedInfoUsableType(ty) {
+			return ty
+		}
+	}
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		switch e.Kind {
@@ -1003,6 +1862,11 @@ func inferFormalExprType(expr ast.Expr, env *formalEnv) string {
 		case "true", "false":
 			return "i1"
 		default:
+			if env != nil && env.module != nil {
+				if sig, ok := env.module.definedFuncs[env.module.topLevelSymbol(e.Name)]; ok {
+					return formatFormalFuncType(sig.params, sig.results)
+				}
+			}
 			return env.typeOf(e.Name)
 		}
 	case *ast.BinaryExpr:
@@ -1014,100 +1878,28 @@ func inferFormalExprType(expr ast.Expr, env *formalEnv) string {
 		}
 	case *ast.CallExpr:
 		return inferFormalCallResultType(e, "", env)
+	case *ast.FuncLit:
+		return formalTypeExprToMLIR(e.Type, env.module)
+	case *ast.IndexExpr:
+		return formalIndexResultType(inferFormalExprType(e.X, env))
 	case *ast.ParenExpr:
 		return inferFormalExprType(e.X, env)
+	case *ast.SelectorExpr:
+		return formalOpaqueType("value")
+	case *ast.StarExpr:
+		return formalDerefType(inferFormalExprType(e.X, env))
+	case *ast.TypeAssertExpr:
+		if e.Type != nil {
+			return formalTypeExprToMLIR(e.Type, env.module)
+		}
+		return formalOpaqueType("value")
 	case *ast.UnaryExpr:
+		if e.Op == token.AND {
+			return "!go.ptr<" + inferFormalExprType(e.X, env) + ">"
+		}
 		return inferFormalExprType(e.X, env)
 	}
 	return formalOpaqueType("value")
-}
-
-func inferFormalCallResultType(call *ast.CallExpr, hintedTy string, env *formalEnv) string {
-	if hintedTy != "" {
-		return normalizeFormalType(hintedTy)
-	}
-	switch fun := call.Fun.(type) {
-	case *ast.Ident:
-		switch fun.Name {
-		case "len", "cap", "copy":
-			return "i32"
-		case "append":
-			if len(call.Args) > 0 {
-				return inferFormalExprType(call.Args[0], env)
-			}
-			return "!go.slice<i32>"
-		case "make":
-			if len(call.Args) > 0 {
-				return goTypeToFormalMLIR(call.Args[0])
-			}
-		}
-	case *ast.SelectorExpr:
-		switch renderSelector(fun) {
-		case "fmt.Sprintf":
-			return "!go.string"
-		case "fmt.Errorf":
-			return "!go.error"
-		}
-	}
-	return formalOpaqueType("result")
-}
-
-func goTypeToFormalMLIR(expr ast.Expr) string {
-	switch t := expr.(type) {
-	case nil:
-		return formalOpaqueType("unit")
-	case *ast.Ident:
-		switch t.Name {
-		case "int":
-			return "i32"
-		case "bool":
-			return "i1"
-		case "string":
-			return "!go.string"
-		case "error":
-			return "!go.error"
-		case "any", "interface{}":
-			return formalOpaqueType("any")
-		default:
-			return "!go.named<\"" + sanitizeName(t.Name) + "\">"
-		}
-	case *ast.SelectorExpr:
-		return "!go.named<\"" + sanitizeName(renderSelector(t)) + "\">"
-	case *ast.StarExpr:
-		return "!go.ptr<" + goTypeToFormalMLIR(t.X) + ">"
-	case *ast.ArrayType:
-		if t.Len == nil {
-			return "!go.slice<" + normalizeFormalElementType(goTypeToFormalMLIR(t.Elt)) + ">"
-		}
-		return formalOpaqueType("array")
-	case *ast.MapType:
-		return formalOpaqueType("map")
-	case *ast.InterfaceType:
-		return formalOpaqueType("interface")
-	case *ast.FuncType:
-		return formalOpaqueType("func")
-	case *ast.StructType:
-		return formalOpaqueType("struct")
-	case *ast.ChanType:
-		return formalOpaqueType("chan")
-	case *ast.Ellipsis:
-		return formalOpaqueType("vararg")
-	case *ast.ParenExpr:
-		return goTypeToFormalMLIR(t.X)
-	default:
-		return formalOpaqueType("type")
-	}
-}
-
-func formalCalleeName(expr ast.Expr) string {
-	switch callee := expr.(type) {
-	case *ast.Ident:
-		return sanitizeName(callee.Name)
-	case *ast.SelectorExpr:
-		return sanitizeName(renderSelector(callee))
-	default:
-		return ""
-	}
 }
 
 func formalOpaqueType(name string) string {
@@ -1122,9 +1914,6 @@ func normalizeFormalType(ty string) string {
 }
 
 func normalizeFormalElementType(ty string) string {
-	if strings.HasPrefix(ty, "!go.slice<") || strings.HasPrefix(ty, "!go.ptr<") {
-		return formalOpaqueType("element")
-	}
 	return normalizeFormalType(ty)
 }
 
@@ -1145,10 +1934,26 @@ func isMakeBuiltin(call *ast.CallExpr) bool {
 	return ok && ident.Name == "make" && len(call.Args) > 0
 }
 
-func isTypeExpr(expr ast.Expr) bool {
-	switch expr.(type) {
-	case *ast.Ident, *ast.SelectorExpr, *ast.StarExpr, *ast.ArrayType, *ast.InterfaceType, *ast.StructType, *ast.MapType, *ast.FuncType, *ast.ChanType, *ast.Ellipsis, *ast.ParenExpr:
+func isFormalTypeConversionCall(call *ast.CallExpr, module *formalModuleContext) bool {
+	if len(call.Args) != 1 {
+		return false
+	}
+	return isFormalTypeExpr(call.Fun, module)
+}
+
+func isFormalTypeExpr(expr ast.Expr, module *formalModuleContext) bool {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		switch t.Name {
+		case "any", "bool", "byte", "complex128", "complex64", "error", "float32", "float64", "int", "int16", "int32", "int64", "int8", "rune", "string", "uint", "uint16", "uint32", "uint64", "uint8", "uintptr":
+			return true
+		default:
+			return module != nil && module.isNamedType(t.Name)
+		}
+	case *ast.StarExpr, *ast.ArrayType, *ast.InterfaceType, *ast.StructType, *ast.MapType, *ast.FuncType, *ast.ChanType, *ast.Ellipsis:
 		return true
+	case *ast.ParenExpr:
+		return isFormalTypeExpr(t.X, module)
 	default:
 		return false
 	}

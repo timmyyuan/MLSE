@@ -2,229 +2,103 @@ package gofrontend
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
 
-func writeFormalTestSource(t *testing.T, source string) string {
+func TestCompileFileWithFileCheck(t *testing.T) {
+	fileCheck := discoverFileCheck(t)
+
+	matches, err := filepath.Glob(filepath.Join("testdata", "*.go"))
+	if err != nil {
+		t.Fatalf("glob testdata: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("expected at least one gofrontend FileCheck fixture")
+	}
+	sort.Strings(matches)
+
+	for _, path := range matches {
+		path := path
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			mode := parseFixtureCompileMode(t, path)
+
+			var (
+				got string
+				err error
+			)
+			switch mode {
+			case "default":
+				got, err = CompileFile(path)
+			case "formal":
+				got, err = CompileFileFormal(path)
+			default:
+				t.Fatalf("unsupported fixture compile mode %q in %s", mode, path)
+			}
+			if err != nil {
+				t.Fatalf("compile %s fixture %q: %v", mode, path, err)
+			}
+
+			cmd := exec.Command(fileCheck, path, "--input-file=-", "--dump-input=fail")
+			cmd.Stdin = strings.NewReader(got)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("FileCheck failed for %s:\n%s\ncompiled output:\n%s", path, out, got)
+			}
+		})
+	}
+}
+
+func discoverFileCheck(t *testing.T) string {
 	t.Helper()
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "input.go")
-	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
-		t.Fatalf("write source: %v", err)
+	candidates := []string{"FileCheck"}
+	candidates = append(candidates, []string{
+		"/opt/homebrew/opt/llvm@20/bin/FileCheck",
+		"/usr/local/opt/llvm/bin/FileCheck",
+	}...)
+
+	for _, candidate := range candidates {
+		path, err := exec.LookPath(candidate)
+		if err == nil {
+			return path
+		}
 	}
-	return path
+
+	t.Skip("FileCheck not found on PATH; skipping gofrontend FileCheck fixtures")
+	return ""
 }
 
-func TestCompileFileDefaultsToFormalOutput(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
+func parseFixtureCompileMode(t *testing.T, path string) string {
+	t.Helper()
 
-func add(a int, b int) int {
-	c := a + b
-	return c
-}
-`)
-
-	got, err := CompileFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("CompileFile(%q): %v", path, err)
+		t.Fatalf("read fixture %q: %v", path, err)
 	}
-	if strings.Contains(got, "mlse.") {
-		t.Fatalf("expected default frontend output to avoid legacy mlse.* placeholders:\n%s", got)
-	}
-	if !strings.Contains(got, "func.func @add(%a: i32, %b: i32) -> i32") {
-		t.Fatalf("expected formal function signature:\n%s", got)
-	}
-	if !strings.Contains(got, "arith.addi %a, %b : i32") {
-		t.Fatalf("expected arithmetic lowering in formal output:\n%s", got)
-	}
-}
 
-func TestCompileFileFormalEmitsStringConstantAndCall(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
+	mode := "formal"
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "//"))
+		if !strings.HasPrefix(trimmed, "MLSE-COMPILE:") {
+			continue
+		}
+		mode = strings.TrimSpace(strings.TrimPrefix(trimmed, "MLSE-COMPILE:"))
+		break
+	}
 
-import "fmt"
-
-func greet(name string) string {
-	return fmt.Sprintf("hi %s", name)
-}
-`)
-
-	got, err := CompileFileFormal(path)
-	if err != nil {
-		t.Fatalf("CompileFileFormal(%q): %v", path, err)
-	}
-	if !strings.Contains(got, `go.string_constant "hi %s" : !go.string`) {
-		t.Fatalf("expected go.string_constant in formal output:\n%s", got)
-	}
-	if !strings.Contains(got, "func.call @fmt.Sprintf(") {
-		t.Fatalf("expected direct func.call lowering for selector call:\n%s", got)
-	}
-}
-
-func TestCompileFileFormalEmitsMakeSliceAndNil(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
-
-func build(n int) []int {
-	return make([]int, n)
-}
-
-func fail() error {
-	return nil
-}
-`)
-
-	got, err := CompileFileFormal(path)
-	if err != nil {
-		t.Fatalf("CompileFileFormal(%q): %v", path, err)
-	}
-	if !strings.Contains(got, "go.make_slice") {
-		t.Fatalf("expected go.make_slice in formal output:\n%s", got)
-	}
-	if !strings.Contains(got, "go.nil : !go.error") {
-		t.Fatalf("expected go.nil for typed nil return:\n%s", got)
-	}
-}
-
-func TestCompileFileFormalRebindsAssignmentsWithoutLegacyCopies(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
-
-func bump(x int) int {
-	x = x + 1
-	return x
-}
-`)
-
-	got, err := CompileFileFormal(path)
-	if err != nil {
-		t.Fatalf("CompileFileFormal(%q): %v", path, err)
-	}
-	if strings.Contains(got, "%x = %") {
-		t.Fatalf("expected formal output to avoid non-op SSA copy assignments:\n%s", got)
-	}
-	if !strings.Contains(got, "arith.addi %x, ") {
-		t.Fatalf("expected arithmetic result to be returned through rebound variable state:\n%s", got)
-	}
-}
-
-func TestCompileFileFormalLowersTerminatingIfToSCF(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
-
-func sign(x int) int {
-	if x > 0 {
-		return 1
-	}
-	return 0
-}
-`)
-
-	got, err := CompileFileFormal(path)
-	if err != nil {
-		t.Fatalf("CompileFileFormal(%q): %v", path, err)
-	}
-	if !strings.Contains(got, "scf.if") {
-		t.Fatalf("expected terminating if to lower to scf.if:\n%s", got)
-	}
-	if strings.Contains(got, `go.todo "IfStmt"`) {
-		t.Fatalf("expected terminating if to avoid generic go.todo fallback:\n%s", got)
-	}
-}
-
-func TestCompileFileFormalAppendsFallbackReturnWhenNeeded(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
-
-func sign(x int) int {
-	if x > 0 {
-		return 1
-	}
-}
-`)
-
-	got, err := CompileFileFormal(path)
-	if err != nil {
-		t.Fatalf("CompileFileFormal(%q): %v", path, err)
-	}
-	if !strings.Contains(got, `go.todo "implicit_return_placeholder"`) {
-		t.Fatalf("expected fallback return after unsupported control flow:\n%s", got)
-	}
-}
-
-func TestCompileFileFormalMergesSimpleIfAssignments(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
-
-func choose(b bool) int {
-	var x int
-	if b {
-		x = 1
-	} else {
-		x = 2
-	}
-	return x
-}
-`)
-
-	got, err := CompileFileFormal(path)
-	if err != nil {
-		t.Fatalf("CompileFileFormal(%q): %v", path, err)
-	}
-	if !strings.Contains(got, "scf.if") {
-		t.Fatalf("expected merge if to lower to scf.if:\n%s", got)
-	}
-	if !strings.Contains(got, "scf.yield") {
-		t.Fatalf("expected merge if to yield merged value:\n%s", got)
-	}
-	if strings.Contains(got, `go.todo "IfStmt"`) {
-		t.Fatalf("expected merge if to avoid generic go.todo fallback:\n%s", got)
-	}
-}
-
-func TestCompileFileFormalLowersSimpleCountedLoopToSCFFor(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
-
-func sumTo(n int) int {
-	sum := 0
-	i := 0
-	for i < n {
-		sum = sum + i
-		i = i + 1
-	}
-	return sum
-}
-`)
-
-	got, err := CompileFileFormal(path)
-	if err != nil {
-		t.Fatalf("CompileFileFormal(%q): %v", path, err)
-	}
-	if !strings.Contains(got, "scf.for") {
-		t.Fatalf("expected simple counted loop to lower to scf.for:\n%s", got)
-	}
-	if !strings.Contains(got, "iter_args(") {
-		t.Fatalf("expected loop-carried variable to use iter_args:\n%s", got)
-	}
-	if strings.Contains(got, `go.todo "ForStmt"`) {
-		t.Fatalf("expected simple counted loop to avoid generic go.todo fallback:\n%s", got)
-	}
-}
-
-func TestCompileFileGoIRLikeRemainsAvailable(t *testing.T) {
-	path := writeFormalTestSource(t, `package demo
-
-func sign(x int) int {
-	if x > 0 {
-		return 1
-	}
-	return -1
-}
-`)
-
-	got, err := CompileFileGoIRLike(path)
-	if err != nil {
-		t.Fatalf("CompileFileGoIRLike(%q): %v", path, err)
-	}
-	if !strings.Contains(got, "mlse.if") {
-		t.Fatalf("expected legacy GoIR-like path to remain available:\n%s", got)
+	switch mode {
+	case "default", "formal":
+		return mode
+	default:
+		t.Fatalf("unsupported MLSE-COMPILE mode %q in %s", mode, path)
+		return ""
 	}
 }
