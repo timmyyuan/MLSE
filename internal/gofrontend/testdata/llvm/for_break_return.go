@@ -1,6 +1,6 @@
 // MLSE-COMPILE: formal
-// LLVM-LABEL: define i32 @demo.pick(
-// LLVM: ret i32
+// LLVM-LABEL: define i64 @demo.pick(
+// LLVM: ret i64
 package demo
 
 func pick(xs []int, limit int) int {

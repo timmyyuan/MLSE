@@ -1,10 +1,10 @@
 // MLSE-COMPILE: formal
-// LLVM-LABEL: define i32 @demo.first
-// LLVM: icmp ult i64
-// LLVM: getelementptr i32
+// LLVM-LABEL: define i64 @demo.first
+// LLVM: icmp ugt i64
+// LLVM: getelementptr i64
 // LLVM: call void @runtime.panic.index
 // LLVM: unreachable
-// LLVM: load i32
+// LLVM: load i64
 package demo
 
 func first(xs []int) int {

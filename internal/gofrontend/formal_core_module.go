@@ -7,179 +7,40 @@ import (
 	"strings"
 )
 
-type formalBinding struct {
-	current string
-	ty      string
-	funcSig *formalFuncSig
-}
-
-type formalFuncSig struct {
-	params  []string
-	results []string
-}
-
-type formalExternDecl struct {
-	symbol  string
-	params  []string
-	results []string
-}
-
 // formalModuleContext stores module-level facts needed while printing one file.
 type formalModuleContext struct {
-	packageName  string
-	typed        *formalTypeContext
-	definedFuncs map[string]formalFuncSig
-	namedTypes   map[string]struct{}
-	externByKey  map[string]formalExternDecl
-	externOrder  []string
-	generated    []string
-	nextFuncLit  int
-	funcLitByKey map[string]int
-}
-
-// formalEnv tracks local SSA names, inferred types and generated temporaries for one lowering scope.
-type formalEnv struct {
-	locals      map[string]*formalBinding
-	tempID      int
-	module      *formalModuleContext
-	resultTypes []string
-	currentFunc string
-}
-
-type formalFuncBodySpec struct {
-	name    string
-	recv    *ast.FieldList
-	fnType  *ast.FuncType
-	body    *ast.BlockStmt
-	private bool
-}
-
-type formalHelperCallSpec struct {
-	base       string
-	args       []string
-	argTys     []string
-	resultTy   string
-	tempPrefix string
-}
-
-// newFormalEnv allocates one function-scoped lowering environment.
-func newFormalEnv(module *formalModuleContext) *formalEnv {
-	return &formalEnv{locals: make(map[string]*formalBinding), module: module}
-}
-
-func (e *formalEnv) define(name string, ty string) string {
-	if binding, ok := e.locals[name]; ok {
-		if ty != "" {
-			binding.ty = ty
-			binding.funcSig = formalFuncSigForType(ty)
-		}
-		return binding.current
-	}
-	ssa := "%" + sanitizeName(name)
-	e.locals[name] = &formalBinding{current: ssa, ty: ty, funcSig: formalFuncSigForType(ty)}
-	return ssa
-}
-
-func (e *formalEnv) assign(name string, ty string) string {
-	if _, ok := e.locals[name]; !ok {
-		return e.define(name, ty)
-	}
-	binding := e.locals[name]
-	if ty != "" {
-		binding.ty = ty
-		binding.funcSig = formalFuncSigForType(ty)
-	}
-	return binding.current
-}
-
-func (e *formalEnv) defineOrAssign(name string, ty string) string {
-	if _, ok := e.locals[name]; ok {
-		return e.assign(name, ty)
-	}
-	return e.define(name, ty)
-}
-
-func (e *formalEnv) bindValue(name string, value string, ty string) {
-	if binding, ok := e.locals[name]; ok {
-		binding.current = value
-		if ty != "" {
-			binding.ty = ty
-			binding.funcSig = formalFuncSigForType(ty)
-		}
-		return
-	}
-	e.locals[name] = &formalBinding{current: value, ty: ty, funcSig: formalFuncSigForType(ty)}
-}
-
-func (e *formalEnv) use(name string) string {
-	if binding, ok := e.locals[name]; ok {
-		return binding.current
-	}
-	return e.define(name, formalOpaqueType("value"))
-}
-
-func (e *formalEnv) typeOf(name string) string {
-	if binding, ok := e.locals[name]; ok && binding.ty != "" {
-		return binding.ty
-	}
-	return formalOpaqueType("value")
-}
-
-func (e *formalEnv) temp(prefix string) string {
-	e.tempID++
-	return fmt.Sprintf("%%%s%d", sanitizeName(prefix), e.tempID)
-}
-
-func (e *formalEnv) clone() *formalEnv {
-	cloned := &formalEnv{
-		locals:      make(map[string]*formalBinding, len(e.locals)),
-		tempID:      e.tempID,
-		module:      e.module,
-		resultTypes: append([]string(nil), e.resultTypes...),
-		currentFunc: e.currentFunc,
-	}
-	for name, binding := range e.locals {
-		copied := *binding
-		if binding.funcSig != nil {
-			copied.funcSig = cloneFormalFuncSig(*binding.funcSig)
-		}
-		cloned.locals[name] = &copied
-	}
-	return cloned
-}
-
-func formalFuncSigForType(ty string) *formalFuncSig {
-	sig, ok := parseFormalFuncType(ty)
-	if !ok {
-		return nil
-	}
-	return cloneFormalFuncSig(sig)
-}
-
-func cloneFormalFuncSig(sig formalFuncSig) *formalFuncSig {
-	return &formalFuncSig{
-		params:  append([]string(nil), sig.params...),
-		results: append([]string(nil), sig.results...),
-	}
-}
-
-func syncFormalTempID(target *formalEnv, others ...*formalEnv) {
-	for _, other := range others {
-		if other != nil && other.tempID > target.tempID {
-			target.tempID = other.tempID
-		}
-	}
+	packageName   string
+	goarch        string
+	targetIntTy   string
+	targetIntBits int
+	typed         *formalTypeContext
+	definedFuncs  map[string]formalFuncSig
+	namedTypes    map[string]struct{}
+	externByKey   map[string]formalExternDecl
+	externOrder   []string
+	generated     []string
+	nextFuncLit   int
+	funcLitByKey  map[string]int
+	scopes        []formalScopeEntry
+	scopeByNode   map[ast.Node]int
+	parentByNode  map[ast.Node]ast.Node
 }
 
 // newFormalModuleContext collects module-level declarations before function lowering starts.
 func newFormalModuleContext(file *ast.File, funcs []*ast.FuncDecl, typed *formalTypeContext) *formalModuleContext {
+	goarch, targetIntBits := detectFormalTarget()
 	module := &formalModuleContext{
-		packageName:  sanitizeName(formalPackageName(file)),
-		typed:        typed,
-		definedFuncs: make(map[string]formalFuncSig, len(funcs)),
-		namedTypes:   make(map[string]struct{}),
-		externByKey:  make(map[string]formalExternDecl),
-		funcLitByKey: make(map[string]int),
+		packageName:   sanitizeName(formalPackageName(file)),
+		goarch:        goarch,
+		targetIntTy:   formalIntegerTypeForBits(targetIntBits),
+		targetIntBits: targetIntBits,
+		typed:         typed,
+		definedFuncs:  make(map[string]formalFuncSig, len(funcs)),
+		namedTypes:    make(map[string]struct{}),
+		externByKey:   make(map[string]formalExternDecl),
+		funcLitByKey:  make(map[string]int),
+		scopeByNode:   make(map[ast.Node]int),
+		parentByNode:  make(map[ast.Node]ast.Node),
 	}
 	for _, fn := range funcs {
 		module.definedFuncs[formalFuncSymbol(fn, module)] = formalFuncSigFromDecl(fn, module)
@@ -198,6 +59,7 @@ func newFormalModuleContext(file *ast.File, funcs []*ast.FuncDecl, typed *formal
 				module.namedTypes[typeSpec.Name.Name] = struct{}{}
 			}
 		}
+		module.indexScopeMetadata(file)
 	}
 	return module
 }
@@ -233,6 +95,27 @@ func (m *formalModuleContext) emitExternDecls() string {
 
 func (m *formalModuleContext) emitGeneratedFuncs() string {
 	return strings.Join(m.generated, "")
+}
+
+func (m *formalModuleContext) emitScopeTableAttr() string {
+	if m == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(m.scopes))
+	for _, scope := range m.scopes {
+		parts = append(parts, fmt.Sprintf(
+			"{id = %d : i64, label = %q, parent = %d : i64, kind = %q, name = %q, file = %q, line = %d : i64, col = %d : i64}",
+			scope.ID,
+			scope.Label,
+			scope.Parent,
+			scope.Kind,
+			scope.Name,
+			scope.File,
+			scope.Line,
+			scope.Column,
+		))
+	}
+	return "go.scope_table = [" + strings.Join(parts, ", ") + "]"
 }
 
 func (m *formalModuleContext) isDefinedFunc(name string) bool {
@@ -338,6 +221,110 @@ func (m *formalModuleContext) addGeneratedFunc(text string) {
 		return
 	}
 	m.generated = append(m.generated, text)
+}
+
+func (m *formalModuleContext) scopeForNode(node ast.Node) (formalScopeEntry, bool) {
+	if m == nil || node == nil {
+		return formalScopeEntry{}, false
+	}
+	for current := node; current != nil; current = m.parentByNode[current] {
+		if id, ok := m.scopeByNode[current]; ok && id >= 0 && id < len(m.scopes) {
+			return m.scopes[id], true
+		}
+	}
+	return formalScopeEntry{}, false
+}
+
+func (m *formalModuleContext) scopeAttrForNode(node ast.Node) string {
+	scope, ok := m.scopeForNode(node)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("attributes {go.scope = %d : i64}", scope.ID)
+}
+
+func (m *formalModuleContext) sourcePosition(node ast.Node) (string, int, int, bool) {
+	if m == nil || m.typed == nil || m.typed.fset == nil || node == nil {
+		return "", 0, 0, false
+	}
+	pos := m.typed.fset.PositionFor(node.Pos(), false)
+	if !pos.IsValid() {
+		return "", 0, 0, false
+	}
+	file := m.typed.sourcePath
+	if file == "" {
+		file = formalDisplaySourcePath(pos.Filename)
+	}
+	return file, pos.Line, pos.Column, true
+}
+
+func (m *formalModuleContext) indexScopeMetadata(file *ast.File) {
+	if m == nil || file == nil {
+		return
+	}
+	var stack []ast.Node
+	ast.Inspect(file, func(n ast.Node) bool {
+		if n == nil {
+			if len(stack) != 0 {
+				stack = stack[:len(stack)-1]
+			}
+			return false
+		}
+		if len(stack) != 0 {
+			m.parentByNode[n] = stack[len(stack)-1]
+		}
+		if kind, name, ok := m.scopeDescriptor(n); ok {
+			m.addScope(n, kind, name, m.scopeParentID(stack))
+		}
+		stack = append(stack, n)
+		return true
+	})
+}
+
+func (m *formalModuleContext) scopeDescriptor(node ast.Node) (string, string, bool) {
+	switch n := node.(type) {
+	case *ast.FuncDecl:
+		return "func", formalFuncSymbol(n, m), true
+	case *ast.FuncLit:
+		return "funclit", "funclit", true
+	case *ast.IfStmt:
+		return "if", "if", true
+	case *ast.ForStmt:
+		return "for", "for", true
+	case *ast.RangeStmt:
+		return "range", "range", true
+	default:
+		return "", "", false
+	}
+}
+
+func (m *formalModuleContext) scopeParentID(stack []ast.Node) int {
+	for i := len(stack) - 1; i >= 0; i-- {
+		if id, ok := m.scopeByNode[stack[i]]; ok {
+			return id
+		}
+	}
+	return -1
+}
+
+func (m *formalModuleContext) addScope(node ast.Node, kind string, name string, parent int) {
+	if m == nil || node == nil {
+		return
+	}
+	file, line, col, _ := m.sourcePosition(node)
+	id := len(m.scopes)
+	entry := formalScopeEntry{
+		ID:     id,
+		Label:  fmt.Sprintf("scope%d", id),
+		Parent: parent,
+		Kind:   kind,
+		Name:   sanitizeName(name),
+		File:   file,
+		Line:   line,
+		Column: col,
+	}
+	m.scopes = append(m.scopes, entry)
+	m.scopeByNode[node] = id
 }
 
 func formalReceiverSymbolFromFieldList(fields *ast.FieldList) string {

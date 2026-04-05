@@ -22,7 +22,7 @@ func emitFormalAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
 		return emitFormalExpandedAssignStmt(s, env)
 	}
 	if len(s.Lhs) != len(s.Rhs) {
-		return fmt.Sprintf("    go.todo %q\n", "assign_arity_mismatch")
+		return emitFormalLinef(s, env, "    go.todo %q", "assign_arity_mismatch")
 	}
 
 	var buf strings.Builder
@@ -60,7 +60,7 @@ func emitFormalAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
 		buf.WriteString(prelude)
 		assignText, ok := emitFormalAssignTargetValue(s.Lhs[i], value, ty, env)
 		if !ok {
-			buf.WriteString(fmt.Sprintf("    go.todo %q\n", "assign_target"))
+			buf.WriteString(emitFormalLinef(s, env, "    go.todo %q", "assign_target"))
 			continue
 		}
 		buf.WriteString(assignText)
@@ -92,7 +92,7 @@ func emitFormalExpandedAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
 			}
 			assignText, ok := emitFormalAssignTargetValue(lhs, values[i], types[i], env)
 			if !ok {
-				buf.WriteString(fmt.Sprintf("    go.todo %q\n", "assign_target"))
+				buf.WriteString(emitFormalLinef(s, env, "    go.todo %q", "assign_target"))
 				continue
 			}
 			buf.WriteString(assignText)
@@ -278,16 +278,24 @@ func emitFormalAssignTargetValue(lhs ast.Expr, value string, valueTy string, env
 		}
 		base, baseTy, basePrelude := emitFormalExpr(target.X, "", env)
 		fieldTy := formalAssignTargetType(lhs, env)
-		fieldAddr, fieldAddrTy, fieldAddrPrelude, ok := emitFormalFieldAddr(base, baseTy, target.Sel.Name, fieldTy, env)
+		fieldOffset, hasFieldOffset := formalSelectorFieldOffset(target, env.module)
+		fieldAddr, fieldAddrTy, fieldAddrPrelude, ok := emitFormalFieldAddr(formalFieldAddrSpec{
+			base:      base,
+			baseTy:    baseTy,
+			field:     target.Sel.Name,
+			fieldTy:   fieldTy,
+			offset:    fieldOffset,
+			hasOffset: hasFieldOffset,
+		}, env)
 		if ok {
-			storePrelude, storeOK := emitFormalStore(value, valueTy, fieldAddr, fieldAddrTy)
+			storePrelude, storeOK := emitFormalStore(value, valueTy, fieldAddr, fieldAddrTy, env)
 			if storeOK {
 				return basePrelude + fieldAddrPrelude + storePrelude, true
 			}
 		}
 		updatedBase, helperPrelude := emitFormalHelperCall(
 			formalHelperCallSpec{
-				base:       "__mlse_store_selector_" + sanitizeName(target.Sel.Name),
+				base:       formalRuntimeStoreSelectorSymbol(target.Sel.Name).String(),
 				args:       []string{base, value},
 				argTys:     []string{baseTy, valueTy},
 				resultTy:   baseTy,
@@ -314,7 +322,7 @@ func emitFormalAssignTargetValue(lhs ast.Expr, value string, valueTy string, env
 				elemTy:  elementTy,
 			}, env)
 			if ok {
-				storePrelude, storeOK := emitFormalStore(value, valueTy, elemAddr, elemAddrTy)
+				storePrelude, storeOK := emitFormalStore(value, valueTy, elemAddr, elemAddrTy, env)
 				if storeOK {
 					return sourcePrelude + indexPrelude + elemAddrPrelude + storePrelude, true
 				}
@@ -322,7 +330,7 @@ func emitFormalAssignTargetValue(lhs ast.Expr, value string, valueTy string, env
 		}
 		updatedSource, helperPrelude := emitFormalHelperCall(
 			formalHelperCallSpec{
-				base:       "__mlse_store_index_" + sanitizeName(sourceTy),
+				base:       formalRuntimeStoreIndexSymbol(sourceTy).String(),
 				args:       []string{source, index, value},
 				argTys:     []string{sourceTy, indexTy, valueTy},
 				resultTy:   sourceTy,
@@ -337,13 +345,13 @@ func emitFormalAssignTargetValue(lhs ast.Expr, value string, valueTy string, env
 		return sourcePrelude + indexPrelude + helperPrelude + rebindPrelude, true
 	case *ast.StarExpr:
 		ptr, ptrTy, ptrPrelude := emitFormalExpr(target.X, "", env)
-		storePrelude, ok := emitFormalStore(value, valueTy, ptr, ptrTy)
+		storePrelude, ok := emitFormalStore(value, valueTy, ptr, ptrTy, env)
 		if ok {
 			return ptrPrelude + storePrelude, true
 		}
 		updatedPtr, helperPrelude := emitFormalHelperCall(
 			formalHelperCallSpec{
-				base:       "__mlse_store_deref_" + sanitizeName(ptrTy),
+				base:       formalRuntimeStoreDerefSymbol(ptrTy).String(),
 				args:       []string{ptr, value},
 				argTys:     []string{ptrTy, valueTy},
 				resultTy:   ptrTy,

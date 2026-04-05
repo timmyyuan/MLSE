@@ -182,7 +182,8 @@ def Go_FieldAddrOp : Go_Op<"field_addr", [Pure]> {
     decisions to later lowering.
   }];
 
-  let arguments = (ins Go_FieldBaseLike:$base, StrAttr:$field);
+  let arguments = (ins Go_FieldBaseLike:$base, StrAttr:$field,
+                       OptionalAttr<I64Attr>:$offset);
   let results = (outs Go_PointerLike:$result);
   let hasVerifier = 1;
   let assemblyFormat = "$base `,` $field attr-dict `:` type($base) `->` type($result)";

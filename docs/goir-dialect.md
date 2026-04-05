@@ -64,6 +64,14 @@
 - `go.todo`
 - `go.todo_value`
 
+除了 `go` dialect 自身的类型和 op，当前 formal bridge 还会带两层源码 metadata：
+
+- module 级 `go.scope_table`：记录函数和当前已建模的 `if / for / range / funclit` scope
+- 普通 MLIR `loc(...)`：直接挂在 `func.func` 和前端发射的 op 上，当前默认使用 `loc("scopeN"("path.go":line:col))`
+- 调用方可通过 `MLSE_SOURCE_DISPLAY_PATH` 覆盖 metadata 里的展示路径，避免 staging / GOPATH 临时路径泄露到 formal dump
+
+这两层都不是新的 `go` dialect op；它们只是 formal bridge 对现有 MLIR location / attribute 机制的最小使用，用来把源码文件、行列和近邻作用域穿过 frontend 与 bootstrap lowering
+
 这批实体的目的不是“已经完整表达 Go”，而是先把最常见、最稳定、且不适合直接塞进标准 dialect 的 Go 语义骨架放进真正的 MLIR dialect 中，同时为 frontend 迁移提供一个可解析的过渡面。
 
 其中：
@@ -77,7 +85,7 @@
 - `go.append`：承接 `append` 对 slice 的增长语义
 - `go.append_slice`：承接 `append(dst, src...)` 这类 slice spread 追加
 - `go.elem_addr` / `go.load` / `go.store`：承接 slice 下标读写在 frontend 尚未下沉到 LLVM 级地址模型前的最小地址化桥接
-- `go.field_addr` / `go.load` / `go.store`：承接 selector / deref 读写在 frontend 尚未下沉到 LLVM 级地址模型前的最小地址化桥接
+- `go.field_addr` / `go.load` / `go.store`：承接 selector / deref 读写在 frontend 尚未下沉到 LLVM 级地址模型前的最小地址化桥接；当 frontend 已经能通过 `go/types + sizes` 算出静态字段偏移时，`go.field_addr` 还会携带一个 `offset` 属性
 - `go.todo` / `go.todo_value`：承接 frontend 迁移阶段尚未完成的 statement / value lowering
 
 与此同时，frontend bridge 已经开始直接复用标准控制流 dialect：
@@ -99,7 +107,7 @@
 当前 `mlse-opt` 默认仍以解析 / round-trip 为主，用来验证 dialect 注册，以及类型 / op 的 parser/printer；但现在已经有两个显式 lowering 入口：
 
 - `--lower-go-builtins`：只把 `go.len` / `go.cap` / `go.index` / `go.append` / `go.append_slice` lower 成 runtime helper call
-- `--lower-go-bootstrap`：把当前 `!go.*` 类型，以及 `go.string_constant` / `go.nil` / `go.make_slice` / `go.len` / `go.cap` / `go.eq` / `go.neq` / `go.index` / `go.append` / `go.append_slice` / `go.elem_addr` / `go.field_addr` / `go.load` / `go.store` 这批 bootstrap 实体 lower 成 LLVM-legal MLIR；其中布局已知的路径会优先直接 lower，例如 `go.string_constant` 会收成 `llvm.mlir.global` + `llvm.mlir.addressof` + `{ptr, len}`，pointer compare 与 `error == nil` 当前会优先直接收成 `llvm.icmp`，`slice == nil` / `slice != nil` 当前会优先展开成对 `{ptr, len, cap}` 零值的显式判定，string compare 当前会收成固定 ABI 的 `runtime.eq.string` / `runtime.neq.string`，`go.make_slice` 当前会收成固定 ABI 的 `runtime.makeslice`，slice/string 的地址化路径则优先直接 lower 成 `llvm.extractvalue` / `llvm.getelementptr` / `llvm.load` / `llvm.store`，而 `go.field_addr` 当前会收成字段名稳定、签名固定的 `runtime.field.addr.<Field>` helper，而不是继续输出带完整类型后缀的 `__mlse_go_field_addr__...` 名字
+- `--lower-go-bootstrap`：把当前 `!go.*` 类型，以及 `go.string_constant` / `go.nil` / `go.make_slice` / `go.len` / `go.cap` / `go.eq` / `go.neq` / `go.index` / `go.append` / `go.append_slice` / `go.elem_addr` / `go.field_addr` / `go.load` / `go.store` 这批 bootstrap 实体 lower 成 LLVM-legal MLIR；其中布局已知的路径会优先直接 lower，例如 `go.string_constant` 会收成 `llvm.mlir.global` + `llvm.mlir.addressof` + `{ptr, len}`，pointer compare 与 `error == nil` 当前会优先直接收成 `llvm.icmp`，`slice == nil` / `slice != nil` 当前会优先展开成对 `{ptr, len, cap}` 零值的显式判定，string compare 当前会收成固定 ABI 的 `runtime.eq.string` / `runtime.neq.string`，`go.make_slice` 当前会收成固定 ABI 的 `runtime.makeslice`，slice/string 的地址化路径则优先直接 lower 成 `llvm.extractvalue` / `llvm.getelementptr` / `llvm.load` / `llvm.store`；`go.field_addr` 在带静态 `offset` 时当前也会优先直接 lower 成 byte-offset `llvm.getelementptr`，只有拿不到稳定 offset 的路径才保留 `runtime.field.addr.<Field>` helper，而静态布局已知的 `new(T)` / `&T{...}` 当前则统一保留为固定 ABI 的 `runtime.newobject(size, align)` helper call
 
 这两条 lowering 现在都实现为 `Go/Conversion` 下的可复用库，`tools/mlse-opt/mlse-opt.cpp` 只负责驱动层接线。它仍然不是完整 pass runner，但已经足够支撑当前仓库的 `Go -> formal MLIR -> mlse-opt --lower-go-bootstrap -> mlir-opt -> mlir-translate -> LLVM IR` 最小链路。
 

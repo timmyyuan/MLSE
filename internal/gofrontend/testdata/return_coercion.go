@@ -1,6 +1,6 @@
 // CHECK-LABEL: func.func @demo.lookup(%cfg: !go.ptr<!go.named<"Conf">>, %key: !go.string) -> (!go.string, i1)
 // CHECK-NOT: go.todo_value "return_type_mismatch"
-// CHECK: func.call @__mlse_convert__go.named__{{(value|type)}}____to___go.string
+// CHECK: func.call @runtime.convert.{{(value|type)}}.to.string
 package demo
 
 type Conf struct {

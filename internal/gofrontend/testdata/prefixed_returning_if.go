@@ -1,5 +1,5 @@
-// CHECK-LABEL: func.func @demo.pick(%x: i32) -> i32
-// CHECK: arith.constant 1 : i32
+// CHECK-LABEL: func.func @demo.pick(%x: i64) -> i64
+// CHECK: arith.constant 1 : i64
 // CHECK: scf.if
 // CHECK-NOT: go.todo "IfStmt_returning_region"
 package demo

@@ -1,7 +1,6 @@
-// CHECK-LABEL: func.func @demo.branch(%x: !go.named<"any">) -> i32
+// CHECK-LABEL: func.func @demo.branch(%x: !go.named<"any">) -> i64
 // CHECK-NOT: go.todo "IfStmt_condition"
-// CHECK: func.call @__mlse_convert__go.named__any____to__i1
-// CHECK-NOT: __mlse_stmt_if_returning_region
+// CHECK: func.call @runtime.convert.any.to.bool
 // CHECK: scf.if
 package demo
 

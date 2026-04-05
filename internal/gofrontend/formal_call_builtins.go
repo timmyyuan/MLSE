@@ -1,7 +1,6 @@
 package gofrontend
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	"strings"
@@ -16,6 +15,8 @@ func emitFormalBuiltinCall(call *ast.CallExpr, hintedTy string, env *formalEnv) 
 		return emitFormalLenCapBuiltinCall("cap", call, hintedTy, env)
 	case "append":
 		return emitFormalAppendBuiltinCall(call, hintedTy, env)
+	case "new":
+		return emitFormalNewBuiltinCall(call, hintedTy, env)
 	default:
 		return "", "", "", false
 	}
@@ -42,7 +43,7 @@ func emitFormalLenCapBuiltinCall(opName string, call *ast.CallExpr, hintedTy str
 	}
 	resultTy := inferFormalCallResultType(call, hintedTy, env)
 	tmp := env.temp(opName)
-	return tmp, resultTy, prelude + fmt.Sprintf("    %s = go.%s %s : %s -> %s\n", tmp, opName, value, valueTy, resultTy), true
+	return tmp, resultTy, prelude + emitFormalLinef(call, env, "    %s = go.%s %s : %s -> %s", tmp, opName, value, valueTy, resultTy), true
 }
 
 func emitFormalAppendBuiltinCall(call *ast.CallExpr, hintedTy string, env *formalEnv) (string, string, string, bool) {
@@ -67,8 +68,10 @@ func emitFormalAppendBuiltinCall(call *ast.CallExpr, hintedTy string, env *forma
 	operands := append([]string{sliceValue}, values...)
 	operandTys := append([]string{sliceTy}, valueTys...)
 	tmp := env.temp("append")
-	return tmp, resultTy, slicePrelude + valuePrelude + fmt.Sprintf(
-		"    %s = go.append %s : (%s) -> %s\n",
+	return tmp, resultTy, slicePrelude + valuePrelude + emitFormalLinef(
+		call,
+		env,
+		"    %s = go.append %s : (%s) -> %s",
 		tmp,
 		strings.Join(operands, ", "),
 		strings.Join(operandTys, ", "),
@@ -90,8 +93,10 @@ func emitFormalAppendSliceBuiltinCall(call *ast.CallExpr, hintedTy string, env *
 	}
 	resultTy := inferFormalCallResultType(call, hintedTy, env)
 	tmp := env.temp("append_slice")
-	return tmp, resultTy, dstPrelude + srcPrelude + fmt.Sprintf(
-		"    %s = go.append_slice %s, %s : (%s, %s) -> %s\n",
+	return tmp, resultTy, dstPrelude + srcPrelude + emitFormalLinef(
+		call,
+		env,
+		"    %s = go.append_slice %s, %s : (%s, %s) -> %s",
 		tmp,
 		dstValue,
 		srcValue,
@@ -101,12 +106,35 @@ func emitFormalAppendSliceBuiltinCall(call *ast.CallExpr, hintedTy string, env *
 	), true
 }
 
+func emitFormalNewBuiltinCall(call *ast.CallExpr, hintedTy string, env *formalEnv) (string, string, string, bool) {
+	if len(call.Args) != 1 || !isFormalTypeExpr(call.Args[0], env.module) {
+		return "", "", "", false
+	}
+	elemTy := formalTypeExprToMLIR(call.Args[0], env.module)
+	resultTy := normalizeFormalType(hintedTy)
+	if !isFormalPointerType(resultTy) {
+		resultTy = formalPointerType(elemTy)
+	}
+	if size, align, ok := formalStaticTypeExprSizeAlign(call.Args[0], env.module); ok {
+		tmp, prelude, allocOK := emitFormalStaticAlloc(formalStaticAllocSpec{
+			resultTy: resultTy,
+			size:     size,
+			align:    align,
+		}, env)
+		if allocOK {
+			return tmp, resultTy, prelude, true
+		}
+	}
+	tmp, prelude := emitFormalRuntimeTypedNew(resultTy, env)
+	return tmp, resultTy, prelude, true
+}
+
 func emitFormalGoLenValue(source string, sourceTy string, resultTy string, tempPrefix string, env *formalEnv) (string, string, bool) {
 	if !isFormalLenLikeType(sourceTy) {
 		return "", "", false
 	}
 	tmp := env.temp(tempPrefix)
-	return tmp, fmt.Sprintf("    %s = go.len %s : %s -> %s\n", tmp, source, sourceTy, resultTy), true
+	return tmp, emitFormalLinef(nil, env, "    %s = go.len %s : %s -> %s", tmp, source, sourceTy, resultTy), true
 }
 
 type formalGoIndexSpec struct {
@@ -127,7 +155,7 @@ func emitFormalGoIndexValue(spec formalGoIndexSpec, env *formalEnv) (string, str
 		resultTy = formalIndexResultType(spec.sourceTy)
 	}
 	tmp := env.temp(spec.tempPrefix)
-	return tmp, resultTy, fmt.Sprintf("    %s = go.index %s, %s : (%s, %s) -> %s\n", tmp, spec.source, spec.index, spec.sourceTy, spec.indexTy, resultTy), true
+	return tmp, resultTy, emitFormalLinef(nil, env, "    %s = go.index %s, %s : (%s, %s) -> %s", tmp, spec.source, spec.index, spec.sourceTy, spec.indexTy, resultTy), true
 }
 
 func emitFormalIndexedReadValue(spec formalGoIndexSpec, env *formalEnv) (string, string, string, bool) {

@@ -1,4 +1,4 @@
-// CHECK-LABEL: func.func @demo.sign(%x: i32) -> i32
+// CHECK-LABEL: func.func @demo.sign(%x: i64) -> i64
 // CHECK: scf.if
 // CHECK-NOT: go.todo "IfStmt"
 package demo

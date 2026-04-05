@@ -62,8 +62,8 @@ func emitFormalForLoopReturnState(s *ast.ForStmt, suffix []ast.Stmt, env *formal
 	if ivTy != "index" {
 		lowerIndex := env.temp("idx")
 		upperIndex := env.temp("idx")
-		buf.WriteString(fmt.Sprintf("    %s = arith.index_cast %s : %s to index\n", lowerIndex, ivInit, ivTy))
-		buf.WriteString(fmt.Sprintf("    %s = arith.index_cast %s : %s to index\n", upperIndex, upper, ivTy))
+		buf.WriteString(emitFormalLinef(s, env, "    %s = arith.index_cast %s : %s to index", lowerIndex, ivInit, ivTy))
+		buf.WriteString(emitFormalLinef(s, env, "    %s = arith.index_cast %s : %s to index", upperIndex, upper, ivTy))
 		lowerValue = lowerIndex
 		upperValue = upperIndex
 		loopBoundTy = "index"
@@ -86,10 +86,11 @@ func emitFormalForLoopReturnState(s *ast.ForStmt, suffix []ast.Stmt, env *formal
 		_ = ty
 	}
 
-	buf.WriteString(fmt.Sprintf("    %s = arith.constant 1 : %s\n", step, loopBoundTy))
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant 1 : %s", step, loopBoundTy))
 	result := env.temp("loopret")
 	resultTypes := formalLoopReturnResultTypes(initState)
-	buf.WriteString(fmt.Sprintf("    %s = scf.for %s = %s to %s step %s iter_args(%s) -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), ivSSA, lowerValue, upperValue, step, strings.Join(iterArgs, ", "), strings.Join(resultTypes, ", ")))
+	var forBuf strings.Builder
+	forBuf.WriteString(fmt.Sprintf("    %s = scf.for %s = %s to %s step %s iter_args(%s) -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), ivSSA, lowerValue, upperValue, step, strings.Join(iterArgs, ", "), strings.Join(resultTypes, ", ")))
 
 	bodyEnv := env.clone()
 	bodyPrelude := ""
@@ -97,7 +98,7 @@ func emitFormalForLoopReturnState(s *ast.ForStmt, suffix []ast.Stmt, env *formal
 		bodyEnv.bindValue(ivName, ivSSA, ivTy)
 	} else {
 		ivCast := bodyEnv.temp(sanitizeName(ivName) + "_body")
-		bodyPrelude = fmt.Sprintf("    %s = arith.index_cast %s : index to %s\n", ivCast, ivSSA, ivTy)
+		bodyPrelude = emitFormalLinef(s, env, "    %s = arith.index_cast %s : index to %s", ivCast, ivSSA, ivTy)
 		bodyEnv.bindValue(ivName, ivCast, ivTy)
 	}
 
@@ -113,16 +114,17 @@ func emitFormalForLoopReturnState(s *ast.ForStmt, suffix []ast.Stmt, env *formal
 		return "", formalLoopReturnState{}, false
 	}
 	stepResult := bodyEnv.temp("loopstep")
-	buf.WriteString(fmt.Sprintf("        %s = scf.if %s -> (%s) {\n", formalIfResultBinding(stepResult, len(resultTypes)), stopIter, strings.Join(resultTypes, ", ")))
-	buf.WriteString(emitFormalLoopReturnYield(iterState))
-	buf.WriteString("        } else {\n")
-	buf.WriteString(indentBlock(bodyPrelude, 3))
-	buf.WriteString(indentBlock(bodyText, 3))
-	buf.WriteString(indentBlock(emitFormalLoopReturnYield(bodyState), 2))
-	buf.WriteString("        }\n")
+	forBuf.WriteString(fmt.Sprintf("        %s = scf.if %s -> (%s) {\n", formalIfResultBinding(stepResult, len(resultTypes)), stopIter, strings.Join(resultTypes, ", ")))
+	forBuf.WriteString(emitFormalLoopReturnYield(iterState, env))
+	forBuf.WriteString("        } else {\n")
+	forBuf.WriteString(indentBlock(bodyPrelude, 3))
+	forBuf.WriteString(indentBlock(bodyText, 3))
+	forBuf.WriteString(indentBlock(emitFormalLoopReturnYield(bodyState, env), 2))
+	forBuf.WriteString("        }\n")
 	stepRefs := formalLoopReturnRefs(stepResult, initState)
-	buf.WriteString(emitFormalLoopReturnYield(stepRefs))
-	buf.WriteString("    }\n")
+	forBuf.WriteString(emitFormalLoopReturnYield(stepRefs, env))
+	forBuf.WriteString("    }\n")
+	buf.WriteString(annotateFormalStructuredOp(forBuf.String(), s, env))
 	if formalStmtListUsesIdent(suffix, ivName) {
 		exitIV, _, exitPrelude := emitFormalTodoValue("loop_iv_exit", ivTy, env)
 		buf.WriteString(exitPrelude)
@@ -149,14 +151,14 @@ func emitFormalRangeLoopReturnState(s *ast.RangeStmt, env *formalEnv, initState 
 	}
 
 	source, sourceTy, sourcePrelude := emitFormalExpr(s.X, "", env)
-	lengthTmp, lengthPrelude, ok := emitFormalGoLenValue(source, sourceTy, "i32", "rangelen", env)
+	lengthTmp, lengthPrelude, ok := emitFormalGoLenValue(source, sourceTy, formalTargetIntType(env.module), "rangelen", env)
 	if !ok {
 		lengthTmp, lengthPrelude = emitFormalHelperCall(
 			formalHelperCallSpec{
-				base:       "__mlse_range_len_" + sanitizeName(sourceTy),
+				base:       formalRuntimeRangeLenSymbol(sourceTy).String(),
 				args:       []string{source},
 				argTys:     []string{sourceTy},
-				resultTy:   "i32",
+				resultTy:   formalTargetIntType(env.module),
 				tempPrefix: "rangelen",
 			},
 			env,
@@ -184,13 +186,14 @@ func emitFormalRangeLoopReturnState(s *ast.RangeStmt, env *formalEnv, initState 
 	var buf strings.Builder
 	buf.WriteString(sourcePrelude)
 	buf.WriteString(lengthPrelude)
-	buf.WriteString(fmt.Sprintf("    %s = arith.constant 0 : index\n", lower))
-	buf.WriteString(fmt.Sprintf("    %s = arith.index_cast %s : i32 to index\n", upper, lengthTmp))
-	buf.WriteString(fmt.Sprintf("    %s = arith.constant 1 : index\n", step))
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant 0 : index", lower))
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.index_cast %s : %s to index", upper, lengthTmp, formalTargetIntType(env.module)))
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant 1 : index", step))
 
 	result := env.temp("range")
 	resultTypes := formalLoopReturnResultTypes(initState)
-	buf.WriteString(fmt.Sprintf("    %s = scf.for %s = %s to %s step %s iter_args(%s) -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), ivSSA, lower, upper, step, strings.Join(iterArgs, ", "), strings.Join(resultTypes, ", ")))
+	var rangeBuf strings.Builder
+	rangeBuf.WriteString(fmt.Sprintf("    %s = scf.for %s = %s to %s step %s iter_args(%s) -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), ivSSA, lower, upper, step, strings.Join(iterArgs, ", "), strings.Join(resultTypes, ", ")))
 
 	bodyEnv := env.clone()
 	bodyPrelude := emitFormalRangeBindings(s, source, sourceTy, ivSSA, bodyEnv)
@@ -206,16 +209,17 @@ func emitFormalRangeLoopReturnState(s *ast.RangeStmt, env *formalEnv, initState 
 		return "", formalLoopReturnState{}, false
 	}
 	stepResult := bodyEnv.temp("rangestep")
-	buf.WriteString(fmt.Sprintf("        %s = scf.if %s -> (%s) {\n", formalIfResultBinding(stepResult, len(resultTypes)), stopIter, strings.Join(resultTypes, ", ")))
-	buf.WriteString(emitFormalLoopReturnYield(iterState))
-	buf.WriteString("        } else {\n")
-	buf.WriteString(indentBlock(bodyPrelude, 3))
-	buf.WriteString(indentBlock(bodyText, 3))
-	buf.WriteString(indentBlock(emitFormalLoopReturnYield(bodyState), 2))
-	buf.WriteString("        }\n")
+	rangeBuf.WriteString(fmt.Sprintf("        %s = scf.if %s -> (%s) {\n", formalIfResultBinding(stepResult, len(resultTypes)), stopIter, strings.Join(resultTypes, ", ")))
+	rangeBuf.WriteString(emitFormalLoopReturnYield(iterState, env))
+	rangeBuf.WriteString("        } else {\n")
+	rangeBuf.WriteString(indentBlock(bodyPrelude, 3))
+	rangeBuf.WriteString(indentBlock(bodyText, 3))
+	rangeBuf.WriteString(indentBlock(emitFormalLoopReturnYield(bodyState, env), 2))
+	rangeBuf.WriteString("        }\n")
 	stepRefs := formalLoopReturnRefs(stepResult, initState)
-	buf.WriteString(emitFormalLoopReturnYield(stepRefs))
-	buf.WriteString("    }\n")
+	rangeBuf.WriteString(emitFormalLoopReturnYield(stepRefs, env))
+	rangeBuf.WriteString("    }\n")
+	buf.WriteString(annotateFormalStructuredOp(rangeBuf.String(), s, env))
 	syncFormalTempID(env, bodyEnv)
 	return buf.String(), formalLoopReturnLoopExitState(result, initState), true
 }

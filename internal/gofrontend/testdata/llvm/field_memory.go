@@ -1,13 +1,15 @@
 // MLSE-COMPILE: formal
-// LLVM-LABEL: define i32 @demo.setAndRead
-// LLVM: call ptr @runtime.field.addr.X
-// LLVM: store i32
-// LLVM: call ptr @runtime.field.addr.X
-// LLVM: load i32
+// LLVM-LABEL: define i64 @demo.setAndRead
+// LLVM: getelementptr i8, ptr %0, i64 8
+// LLVM: store i64
+// LLVM: getelementptr i8, ptr %0, i64 8
+// LLVM: load i64
+// LLVM-NOT: @runtime.field.addr.X
 package demo
 
 type Holder struct {
-	X int
+	Ready bool
+	X     int
 }
 
 func setAndRead(h *Holder, v int) int {

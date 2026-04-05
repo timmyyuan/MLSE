@@ -1,10 +1,6 @@
 package gofrontend
 
-import (
-	"fmt"
-	"go/ast"
-	"strings"
-)
+import "go/ast"
 
 // emitFormalStarExpr lowers `*ptr` reads through the current typed helper path.
 func emitFormalStarExpr(expr *ast.StarExpr, hintedTy string, env *formalEnv) (string, string, string) {
@@ -19,7 +15,7 @@ func emitFormalStarExpr(expr *ast.StarExpr, hintedTy string, env *formalEnv) (st
 	}
 	tmp, helperPrelude := emitFormalHelperCall(
 		formalHelperCallSpec{
-			base:       "__mlse_deref_" + sanitizeName(ptrTy),
+			base:       formalRuntimeDerefSymbol(ptrTy).String(),
 			args:       []string{ptr},
 			argTys:     []string{ptrTy},
 			resultTy:   resultTy,
@@ -41,7 +37,7 @@ func emitFormalTypeAssertExpr(expr *ast.TypeAssertExpr, hintedTy string, env *fo
 	}
 	tmp, helperPrelude := emitFormalHelperCall(
 		formalHelperCallSpec{
-			base:       "__mlse_type_assert__" + sanitizeName(valueTy) + "__to__" + sanitizeName(resultTy),
+			base:       formalRuntimeTypeAssertSymbol(valueTy, resultTy).String(),
 			args:       []string{value},
 			argTys:     []string{valueTy},
 			resultTy:   resultTy,
@@ -53,6 +49,11 @@ func emitFormalTypeAssertExpr(expr *ast.TypeAssertExpr, hintedTy string, env *fo
 }
 
 func formalBuiltinType(name string) (string, bool) {
+	return formalBuiltinTypeWithModule(name, nil)
+}
+
+func formalBuiltinTypeWithModule(name string, module *formalModuleContext) (string, bool) {
+	targetIntTy := formalTargetIntType(module)
 	switch name {
 	case "bool":
 		return "i1", true
@@ -61,9 +62,15 @@ func formalBuiltinType(name string) (string, bool) {
 	case "int16", "uint16":
 		return "i16", true
 	case "int", "int32", "rune", "uint", "uint32":
-		return "i32", true
-	case "int64", "uint64", "uintptr":
+		return targetIntTy, true
+	case "int64", "uint64":
 		return "i64", true
+	case "uintptr":
+		return targetIntTy, true
+	case "float32":
+		return "f32", true
+	case "float64":
+		return "f64", true
 	case "string":
 		return "!go.string", true
 	case "error":
@@ -88,12 +95,21 @@ func emitFormalCoerceValue(value string, valueTy string, targetTy string, env *f
 	if isFormalIntegerType(valueTy) && isFormalIntegerType(targetTy) {
 		return emitFormalIntegerCast(value, valueTy, targetTy, env)
 	}
+	if isFormalIntegerType(valueTy) && isFormalFloatType(targetTy) {
+		return emitFormalIntToFloatCast(value, valueTy, targetTy, env)
+	}
+	if isFormalFloatType(valueTy) && isFormalIntegerType(targetTy) {
+		return emitFormalFloatToIntegerCast(value, valueTy, targetTy, env)
+	}
+	if isFormalFloatType(valueTy) && isFormalFloatType(targetTy) {
+		return emitFormalFloatCast(value, valueTy, targetTy, env)
+	}
 	if isFormalOpaquePlaceholderType(targetTy) {
 		return "", "", "", false
 	}
 	tmp, prelude := emitFormalHelperCall(
 		formalHelperCallSpec{
-			base:       "__mlse_convert_" + sanitizeName(valueTy) + "__to__" + sanitizeName(targetTy),
+			base:       formalRuntimeConvertSymbol(valueTy, targetTy).String(),
 			args:       []string{value},
 			argTys:     []string{valueTy},
 			resultTy:   targetTy,
@@ -113,7 +129,7 @@ func emitFormalIntegerCast(value string, valueTy string, targetTy string, env *f
 
 	tmp := env.temp("conv")
 	if valueTy == "index" || targetTy == "index" {
-		return tmp, targetTy, fmt.Sprintf("    %s = arith.index_cast %s : %s to %s\n", tmp, value, valueTy, targetTy), true
+		return tmp, targetTy, emitFormalLinef(nil, env, "    %s = arith.index_cast %s : %s to %s", tmp, value, valueTy, targetTy), true
 	}
 
 	valueWidth := formalIntegerWidth(valueTy)
@@ -122,9 +138,9 @@ func emitFormalIntegerCast(value string, valueTy string, targetTy string, env *f
 		return "", "", "", false
 	}
 	if valueWidth < targetWidth {
-		return tmp, targetTy, fmt.Sprintf("    %s = arith.extsi %s : %s to %s\n", tmp, value, valueTy, targetTy), true
+		return tmp, targetTy, emitFormalLinef(nil, env, "    %s = arith.extsi %s : %s to %s", tmp, value, valueTy, targetTy), true
 	}
-	return tmp, targetTy, fmt.Sprintf("    %s = arith.trunci %s : %s to %s\n", tmp, value, valueTy, targetTy), true
+	return tmp, targetTy, emitFormalLinef(nil, env, "    %s = arith.trunci %s : %s to %s", tmp, value, valueTy, targetTy), true
 }
 
 func formalIntegerWidth(ty string) int {
@@ -144,25 +160,50 @@ func formalIntegerWidth(ty string) int {
 	}
 }
 
-func emitFormalHelperMakeCall(args []ast.Expr, targetTy string, env *formalEnv) (string, string, string) {
-	argValues := make([]string, 0, len(args))
-	argTypes := make([]string, 0, len(args))
-	var buf strings.Builder
-	for _, arg := range args {
-		value, ty, prelude := emitFormalExpr(arg, "i32", env)
-		buf.WriteString(prelude)
-		argValues = append(argValues, value)
-		argTypes = append(argTypes, ty)
+func isFormalFloatType(ty string) bool {
+	switch normalizeFormalType(ty) {
+	case "f32", "f64":
+		return true
+	default:
+		return false
 	}
-	tmp, prelude := emitFormalHelperCall(
-		formalHelperCallSpec{
-			base:       "__mlse_make_" + sanitizeName(targetTy),
-			args:       argValues,
-			argTys:     argTypes,
-			resultTy:   targetTy,
-			tempPrefix: "make",
-		},
-		env,
-	)
-	return tmp, targetTy, buf.String() + prelude
+}
+
+func formalFloatWidth(ty string) int {
+	switch normalizeFormalType(ty) {
+	case "f32":
+		return 32
+	case "f64":
+		return 64
+	default:
+		return 0
+	}
+}
+
+func emitFormalIntToFloatCast(value string, valueTy string, targetTy string, env *formalEnv) (string, string, string, bool) {
+	tmp := env.temp("conv")
+	return tmp, targetTy, emitFormalLinef(nil, env, "    %s = arith.sitofp %s : %s to %s", tmp, value, valueTy, targetTy), true
+}
+
+func emitFormalFloatToIntegerCast(value string, valueTy string, targetTy string, env *formalEnv) (string, string, string, bool) {
+	tmp := env.temp("conv")
+	return tmp, targetTy, emitFormalLinef(nil, env, "    %s = arith.fptosi %s : %s to %s", tmp, value, valueTy, targetTy), true
+}
+
+func emitFormalFloatCast(value string, valueTy string, targetTy string, env *formalEnv) (string, string, string, bool) {
+	valueTy = normalizeFormalType(valueTy)
+	targetTy = normalizeFormalType(targetTy)
+	if valueTy == targetTy {
+		return value, targetTy, "", true
+	}
+	valueWidth := formalFloatWidth(valueTy)
+	targetWidth := formalFloatWidth(targetTy)
+	if valueWidth == 0 || targetWidth == 0 {
+		return "", "", "", false
+	}
+	tmp := env.temp("conv")
+	if valueWidth < targetWidth {
+		return tmp, targetTy, emitFormalLinef(nil, env, "    %s = arith.extf %s : %s to %s", tmp, value, valueTy, targetTy), true
+	}
+	return tmp, targetTy, emitFormalLinef(nil, env, "    %s = arith.truncf %s : %s to %s", tmp, value, valueTy, targetTy), true
 }

@@ -1,7 +1,6 @@
 package gofrontend
 
 import (
-	"fmt"
 	"go/ast"
 	"strings"
 )
@@ -21,8 +20,10 @@ func emitFormalMethodCallExpr(call *ast.CallExpr, hintedTy string, env *formalEn
 	var buf strings.Builder
 	buf.WriteString(recvPrelude)
 	buf.WriteString(argPrelude)
-	buf.WriteString(fmt.Sprintf(
-		"    %s = func.call @%s(%s) : (%s) -> %s\n",
+	buf.WriteString(emitFormalLinef(
+		call,
+		env,
+		"    %s = func.call @%s(%s) : (%s) -> %s",
 		tmp,
 		symbol,
 		strings.Join(append([]string{recv}, args...), ", "),
@@ -45,8 +46,10 @@ func emitFormalMethodCallStmt(call *ast.CallExpr, env *formalEnv, argHints []str
 	var buf strings.Builder
 	buf.WriteString(recvPrelude)
 	buf.WriteString(argPrelude)
-	buf.WriteString(fmt.Sprintf(
-		"    func.call @%s(%s) : (%s) -> ()\n",
+	buf.WriteString(emitFormalLinef(
+		call,
+		env,
+		"    func.call @%s(%s) : (%s) -> ()",
 		symbol,
 		strings.Join(append([]string{recv}, args...), ", "),
 		strings.Join(append([]string{recvTy}, argTys...), ", "),
@@ -64,10 +67,10 @@ func formalMethodSymbol(selector *ast.SelectorExpr, params []string, results []s
 	}
 	symbol := formalMethodObjectSymbol(selector, module)
 	if symbol == "" {
-		symbol = module.methodSymbol(name)
+		symbol = formalMethodBaseSymbol(module, name)
 	}
-	if module.isDefinedFunc(symbol) {
+	if formalModuleIsDefinedFunc(module, symbol) {
 		return symbol
 	}
-	return module.registerExtern(symbol, params, results)
+	return registerFormalExtern(module, symbol, params, results)
 }

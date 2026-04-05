@@ -40,29 +40,27 @@ func inferFormalCallResultType(call *ast.CallExpr, hintedTy string, env *formalE
 	if hintedTy != "" {
 		return normalizeFormalType(hintedTy)
 	}
+	if resultTy, ok := inferFormalStdlibCallResultType(call, env); ok {
+		return resultTy
+	}
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
 		switch fun.Name {
 		case "len", "cap", "copy":
-			return "i32"
+			return formalTargetIntType(env.module)
 		case "append":
 			if len(call.Args) > 0 {
 				return inferFormalExprType(call.Args[0], env)
 			}
-			return "!go.slice<i32>"
+			return "!go.slice<" + formalTargetIntType(env.module) + ">"
 		case "make":
 			if len(call.Args) > 0 {
 				return formalTypeExprToMLIR(call.Args[0], env.module)
 			}
-		}
-	case *ast.SelectorExpr:
-		switch renderSelector(fun) {
-		case "strings.Split":
-			return "!go.slice<!go.string>"
-		case "fmt.Sprintf":
-			return "!go.string"
-		case "fmt.Errorf":
-			return "!go.error"
+		case "new":
+			if len(call.Args) > 0 {
+				return formalPointerType(formalTypeExprToMLIR(call.Args[0], env.module))
+			}
 		}
 	}
 	if sig, ok := formalExprFuncSig(call.Fun, env); ok {
@@ -114,10 +112,7 @@ func goTypeToFormalMLIR(expr ast.Expr) string {
 func formalCalleeName(expr ast.Expr, module *formalModuleContext) string {
 	switch callee := expr.(type) {
 	case *ast.Ident:
-		if module != nil {
-			return module.topLevelSymbol(callee.Name)
-		}
-		return sanitizeName(callee.Name)
+		return formalTopLevelSymbol(module, callee.Name)
 	case *ast.SelectorExpr:
 		return formalPackageSelectorSymbol(callee, nil)
 	default:
@@ -135,8 +130,8 @@ func formalCallSymbol(expr ast.Expr, argTys []string, resultTys []string, module
 	if callee == "" {
 		return ""
 	}
-	if module == nil || module.isDefinedFunc(callee) {
+	if module == nil || formalModuleIsDefinedFunc(module, callee) {
 		return callee
 	}
-	return module.registerExtern(callee, argTys, resultTys)
+	return registerFormalExtern(module, callee, argTys, resultTys)
 }

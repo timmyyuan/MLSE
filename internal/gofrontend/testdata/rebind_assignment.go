@@ -1,4 +1,4 @@
-// CHECK-LABEL: func.func @demo.bump(%x: i32) -> i32
+// CHECK-LABEL: func.func @demo.bump(%x: i64) -> i64
 // CHECK: arith.addi %x,
 // CHECK-NOT: %x = %
 package demo

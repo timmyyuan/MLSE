@@ -97,13 +97,13 @@ run_go_builtin_lowering_tests() {
   run_checked_to_file "$(display_path "$input") [lower-go-builtins]" "$lowered" \
     "$mlse_opt" --lower-go-builtins "$input"
 
-  if rg -n 'go\.(len|cap|index|append|append_slice)' "$lowered" >/dev/null; then
+  if rg -n '(^|[[:space:](,=])go\.(len|cap|index|append|append_slice)\b' "$lowered" >/dev/null; then
     echo "FAIL $(display_path "$input") [lower-go-builtins check]" >&2
     cat "$lowered" >&2
     return 1
   fi
 
-  if ! rg -n '@__mlse_go_(len|cap|index|append|append_slice)' "$lowered" >/dev/null; then
+  if ! rg -n '@runtime\.go\.(len|cap|index|append|append_slice)' "$lowered" >/dev/null; then
     echo "FAIL $(display_path "$input") [lower-go-builtins check]" >&2
     cat "$lowered" >&2
     return 1
@@ -123,7 +123,7 @@ run_go_bootstrap_lowering_tests() {
   run_checked_to_file "$(display_path "$input") [lower-go-bootstrap]" "$lowered" \
     "$mlse_opt" --lower-go-bootstrap "$input"
 
-  if rg -n 'go\.|!go\.' "$lowered" >/dev/null; then
+  if rg -n '(^|[[:space:](,=])go\.[A-Za-z_][A-Za-z0-9_]*|!go\.' "$lowered" >/dev/null; then
     echo "FAIL $(display_path "$input") [lower-go-bootstrap check]" >&2
     cat "$lowered" >&2
     return 1
@@ -141,13 +141,13 @@ run_go_bootstrap_lowering_tests() {
     return 1
   fi
 
-  if rg -n '@__mlse_go_(len|cap|index|elem_addr|load|store|append_slice)' "$lowered" >/dev/null; then
+  if rg -n '@runtime\.go\.(len|cap|index|elem_addr|load|store|append_slice)' "$lowered" >/dev/null; then
     echo "FAIL $(display_path "$input") [lower-go-bootstrap helper regression]" >&2
     cat "$lowered" >&2
     return 1
   fi
 
-  if rg -n '@__mlse_go_append' "$lowered" >/dev/null; then
+  if rg -n '@runtime\.go\.append' "$lowered" >/dev/null; then
     echo "FAIL $(display_path "$input") [lower-go-bootstrap append helper regression]" >&2
     cat "$lowered" >&2
     return 1

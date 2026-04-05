@@ -1,4 +1,4 @@
-// CHECK-LABEL: func.func @demo.sign(%x: i32) -> i32
+// CHECK-LABEL: func.func @demo.sign(%x: i64) -> i64
 // CHECK: go.todo "implicit_return_placeholder"
 package demo
 

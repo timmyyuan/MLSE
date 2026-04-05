@@ -1,6 +1,6 @@
-// LLVM-LABEL: define i32 @demo.pick
+// LLVM-LABEL: define i64 @demo.pick
 // LLVM: br label
-// LLVM: ret i32
+// LLVM: ret i64
 package demo
 
 func pick(xs []int) int {

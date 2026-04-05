@@ -1,4 +1,4 @@
-// CHECK-LABEL: func.func @demo.log(%x: i32)
+// CHECK-LABEL: func.func @demo.log(%x: i64)
 // CHECK-NOT: go.todo "implicit_return_placeholder"
 // CHECK: return
 package demo

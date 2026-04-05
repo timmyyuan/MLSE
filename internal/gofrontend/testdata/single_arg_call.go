@@ -1,5 +1,5 @@
-// CHECK-LABEL: func.func @demo.apply(%x: i32) -> i32
-// CHECK: func.call @demo.inc(%x) : (i32) -> i32
+// CHECK-LABEL: func.func @demo.apply(%x: i64) -> i64
+// CHECK: func.call @demo.inc(%x) : (i64) -> i64
 // CHECK-NOT: go.todo_value "type_conversion"
 package demo
 

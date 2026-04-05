@@ -90,6 +90,9 @@ func inferFormalIdentContextType(ident *ast.Ident, parent ast.Node, env *formalE
 }
 
 func formalCallArgHint(call *ast.CallExpr, index int, env *formalEnv) string {
+	if hint, ok := inferFormalStdlibCallArgHint(call, index, env); ok {
+		return hint
+	}
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
 		switch fun.Name {
@@ -97,11 +100,6 @@ func formalCallArgHint(call *ast.CallExpr, index int, env *formalEnv) string {
 			if index == 0 {
 				return formalOpaqueType("value")
 			}
-		}
-	case *ast.SelectorExpr:
-		switch renderSelector(fun) {
-		case "strings.Contains", "strings.Split", "strings.HasPrefix", "strings.HasSuffix":
-			return "!go.string"
 		}
 	}
 	if sig, ok := formalExprFuncSig(call.Fun, env); ok && index < len(sig.params) {

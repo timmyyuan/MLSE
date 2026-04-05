@@ -5,8 +5,8 @@
 // LLVM: add i64 %{{.*}}, 1
 // LLVM: icmp ugt i64
 // LLVM: call { ptr, i64, i64 } @runtime.growslice
-// LLVM: getelementptr i32
-// LLVM: store i32 1,
+// LLVM: getelementptr i64
+// LLVM: store i64 1,
 package demo
 
 func push(xs []int) []int {

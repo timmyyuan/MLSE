@@ -1,4 +1,4 @@
-// CHECK-LABEL: func.func @demo.sumTo(%n: i32) -> i32
+// CHECK-LABEL: func.func @demo.sumTo(%n: i64) -> i64
 // CHECK: scf.for
 // CHECK: iter_args(
 // CHECK-NOT: go.todo "ForStmt"

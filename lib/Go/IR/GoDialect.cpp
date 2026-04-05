@@ -155,6 +155,12 @@ LogicalResult FieldAddrOp::verify() {
   if (!isa<NamedType, PointerType>(baseTy))
     return emitOpError() << "expects named or pointer base, but got " << baseTy;
 
+  if (auto offsetAttr = (*this)->getAttrOfType<IntegerAttr>("offset")) {
+    if (offsetAttr.getInt() < 0)
+      return emitOpError() << "expects non-negative offset, but got "
+                           << offsetAttr.getInt();
+  }
+
   return success();
 }
 

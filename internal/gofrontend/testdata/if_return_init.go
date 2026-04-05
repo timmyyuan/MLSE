@@ -1,4 +1,4 @@
-// CHECK-LABEL: func.func @demo.parse(%s: !go.string) -> (i32, i1)
+// CHECK-LABEL: func.func @demo.parse(%s: !go.string) -> (i64, i1)
 // CHECK-NOT: go.todo "IfStmt_returning_region"
 // CHECK: %ifret
 package demo

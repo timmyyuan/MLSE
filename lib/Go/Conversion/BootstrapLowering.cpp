@@ -895,6 +895,20 @@ public:
     if (failed(getTypeConverter()->convertTypes(op->getResultTypes(),
                                                 resultTypes)))
       return failure();
+    if (auto offsetAttr = op->getAttrOfType<IntegerAttr>("offset")) {
+      int64_t offset = offsetAttr.getInt();
+      if (offset == 0) {
+        rewriter.replaceOp(op, adaptor.getBase());
+        return success();
+      }
+      auto i8Ty = IntegerType::get(rewriter.getContext(), 8);
+      Value offsetValue = buildI64Constant(op.getLoc(), offset, rewriter);
+      auto gep = rewriter.create<LLVM::GEPOp>(op.getLoc(), resultTypes.front(),
+                                              i8Ty, adaptor.getBase(),
+                                              ValueRange{offsetValue});
+      rewriter.replaceOp(op, gep.getResult());
+      return success();
+    }
     ModuleOp module = op->getParentOfType<ModuleOp>();
     llvm::SmallVector<Type, 4> operandTypes;
     operandTypes.reserve(adaptor.getOperands().size());
@@ -996,7 +1010,7 @@ LogicalResult lowerGoBuiltins(ModuleOp module) {
           RuntimeHelperCallSpec{
               op->getLoc(),
               module,
-              "__mlse_go_len",
+              "runtime.go.len",
               ValueRange{lenOp.getValue()},
               op->getResultTypes(),
           },
@@ -1011,7 +1025,7 @@ LogicalResult lowerGoBuiltins(ModuleOp module) {
           RuntimeHelperCallSpec{
               op->getLoc(),
               module,
-              "__mlse_go_cap",
+              "runtime.go.cap",
               ValueRange{capOp.getValue()},
               op->getResultTypes(),
           },
@@ -1026,7 +1040,7 @@ LogicalResult lowerGoBuiltins(ModuleOp module) {
           RuntimeHelperCallSpec{
               op->getLoc(),
               module,
-              "__mlse_go_index",
+              "runtime.go.index",
               ValueRange{indexOp.getValue(), indexOp.getIndex()},
               op->getResultTypes(),
           },
@@ -1045,7 +1059,7 @@ LogicalResult lowerGoBuiltins(ModuleOp module) {
           RuntimeHelperCallSpec{
               op->getLoc(),
               module,
-              "__mlse_go_append",
+              "runtime.go.append",
               operands,
               op->getResultTypes(),
           },
@@ -1060,7 +1074,7 @@ LogicalResult lowerGoBuiltins(ModuleOp module) {
           RuntimeHelperCallSpec{
               op->getLoc(),
               module,
-              "__mlse_go_append_slice",
+              "runtime.go.append_slice",
               ValueRange{appendSliceOp.getDst(), appendSliceOp.getSrc()},
               op->getResultTypes(),
           },

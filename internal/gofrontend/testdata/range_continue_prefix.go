@@ -1,4 +1,4 @@
-// CHECK-LABEL: func.func @demo.mark(%xs: !go.slice<i32>) -> !go.slice<i32>
+// CHECK-LABEL: func.func @demo.mark(%xs: !go.slice<i64>) -> !go.slice<i64>
 // CHECK: scf.for
 // CHECK: scf.if
 // CHECK-NOT: go.todo "BranchStmt"

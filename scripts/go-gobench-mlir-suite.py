@@ -489,6 +489,7 @@ def probe_one(
     frontend_env = dict(ctx.env)
     frontend_env["GO111MODULE"] = "off"
     frontend_env["GOPATH"] = str(frontend_gopath)
+    frontend_env["MLSE_SOURCE_DISPLAY_PATH"] = display_external_path(source_path, ctx.root)
     frontend = run([ctx.mlse_go_bin, str(staged_source_path)], cwd=ctx.root, env=frontend_env)
     write_text(source_dir / stage_file_name(2, "frontend", ".stdout"), frontend.stdout)
     write_text(source_dir / stage_file_name(2, "frontend", ".stderr"), frontend.stderr)

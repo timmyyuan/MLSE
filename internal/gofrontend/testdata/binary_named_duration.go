@@ -1,8 +1,8 @@
 // CHECK-LABEL: func.func @demo.span() -> !go.named<"time.Duration">
 // CHECK: func.call @time.Hour() : () -> !go.named<"time.Duration">
-// CHECK: func.call @__mlse_convert__go.named__time.Duration____to__i32
+// CHECK: func.call @runtime.convert.time.Duration.to.i64
 // CHECK: arith.muli
-// CHECK: func.call @__mlse_convert_i32__to___go.named__time.Duration__
+// CHECK: func.call @runtime.convert.i64.to.time.Duration
 package demo
 
 import "time"

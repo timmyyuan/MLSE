@@ -1,6 +1,6 @@
-// CHECK-LABEL: func.func @demo.touch(%flag: i1, %a: i32, %b: i32) -> (i32, i32)
+// CHECK-LABEL: func.func @demo.touch(%flag: i1, %a: i64, %b: i64) -> (i64, i64)
 // CHECK-NOT: go.todo "IfStmt_multi_merge"
-// CHECK: = scf.if %flag -> (i32, i32)
+// CHECK: = scf.if %flag -> (i64, i64)
 package demo
 
 func touch(flag bool, a int, b int) (int, int) {

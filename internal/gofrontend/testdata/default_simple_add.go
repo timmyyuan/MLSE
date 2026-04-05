@@ -1,6 +1,6 @@
 // MLSE-COMPILE: default
-// CHECK-LABEL: func.func @demo.add(%a: i32, %b: i32) -> i32
-// CHECK: arith.addi %a, %b : i32
+// CHECK-LABEL: func.func @demo.add(%a: i64, %b: i64) -> i64
+// CHECK: arith.addi %a, %b : i64
 // CHECK-NOT: mlse.
 package demo
 

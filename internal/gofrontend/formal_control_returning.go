@@ -60,8 +60,8 @@ func emitFormalReturnExprOperands(exprs []ast.Expr, resultTypes []string, env *f
 	return values, types, buf.String(), true
 }
 
-func emitFormalYieldLine(values []string, types []string) string {
-	return fmt.Sprintf("        scf.yield %s : %s\n", strings.Join(values, ", "), strings.Join(types, ", "))
+func emitFormalYieldLine(values []string, types []string, env *formalEnv) string {
+	return emitFormalLinef(nil, env, "        scf.yield %s : %s", strings.Join(values, ", "), strings.Join(types, ", "))
 }
 
 func formalMultiResultRefs(base string, arity int) []string {

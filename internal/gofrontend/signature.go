@@ -46,22 +46,26 @@ func emitFieldTypes(fields *ast.FieldList, lowerType func(ast.Expr) string) []st
 	return out
 }
 
-func formatFuncHeader(name string, params []string, results []string) string {
-	return formatFuncHeaderWithVisibility(name, params, results, "")
+func formatFuncHeaderWithAttrs(name string, params []string, results []string, attrs string) string {
+	return formatFuncHeaderWithVisibilityAndAttrs(name, params, results, "", attrs)
 }
 
-func formatPrivateFuncHeader(name string, params []string, results []string) string {
-	return formatFuncHeaderWithVisibility(name, params, results, "private ")
+func formatPrivateFuncHeaderWithAttrs(name string, params []string, results []string, attrs string) string {
+	return formatFuncHeaderWithVisibilityAndAttrs(name, params, results, "private ", attrs)
 }
 
-func formatFuncHeaderWithVisibility(name string, params []string, results []string, visibility string) string {
+func formatFuncHeaderWithVisibilityAndAttrs(name string, params []string, results []string, visibility string, attrs string) string {
+	attrText := ""
+	if attrs != "" {
+		attrText = " " + attrs
+	}
 	switch len(results) {
 	case 0:
-		return fmt.Sprintf("  func.func %s@%s(%s) {\n", visibility, sanitizeName(name), strings.Join(params, ", "))
+		return fmt.Sprintf("  func.func %s@%s(%s)%s {\n", visibility, sanitizeName(name), strings.Join(params, ", "), attrText)
 	case 1:
-		return fmt.Sprintf("  func.func %s@%s(%s) -> %s {\n", visibility, sanitizeName(name), strings.Join(params, ", "), results[0])
+		return fmt.Sprintf("  func.func %s@%s(%s) -> %s%s {\n", visibility, sanitizeName(name), strings.Join(params, ", "), results[0], attrText)
 	default:
-		return fmt.Sprintf("  func.func %s@%s(%s) -> (%s) {\n", visibility, sanitizeName(name), strings.Join(params, ", "), strings.Join(results, ", "))
+		return fmt.Sprintf("  func.func %s@%s(%s) -> (%s)%s {\n", visibility, sanitizeName(name), strings.Join(params, ", "), strings.Join(results, ", "), attrText)
 	}
 }
 

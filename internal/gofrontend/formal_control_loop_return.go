@@ -100,8 +100,8 @@ func emitFormalLoopReturnInit(resultTypes []string, env *formalEnv) (string, for
 	var buf strings.Builder
 	stop := env.temp("stop")
 	done := env.temp("done")
-	buf.WriteString(fmt.Sprintf("    %s = arith.constant false\n", stop))
-	buf.WriteString(fmt.Sprintf("    %s = arith.constant false\n", done))
+	buf.WriteString(emitFormalLinef(nil, env, "    %s = arith.constant false", stop))
+	buf.WriteString(emitFormalLinef(nil, env, "    %s = arith.constant false", done))
 	values := make([]string, 0, len(resultTypes))
 	for _, ty := range resultTypes {
 		value, prelude := emitFormalZeroValue(ty, env)
@@ -122,7 +122,7 @@ func emitFormalReturningLoopStmt(stmt ast.Stmt, remaining []ast.Stmt, env *forma
 	if !ok {
 		return "", 0, false, false
 	}
-	return body + emitFormalReturnLine(values, types), consumed, true, true
+	return body + emitFormalReturnLine(values, types, env), consumed, true, true
 }
 
 func formalLoopReturnResultTypes(state formalLoopReturnState) []string {
@@ -141,8 +141,8 @@ func formalLoopReturnResultValues(state formalLoopReturnState) []string {
 	return values
 }
 
-func emitFormalLoopReturnYield(state formalLoopReturnState) string {
-	return emitFormalYieldLine(formalLoopReturnResultValues(state), formalLoopReturnResultTypes(state))
+func emitFormalLoopReturnYield(state formalLoopReturnState, env *formalEnv) string {
+	return emitFormalYieldLine(formalLoopReturnResultValues(state), formalLoopReturnResultTypes(state), env)
 }
 
 func formalLoopReturnRefs(base string, state formalLoopReturnState) formalLoopReturnState {
@@ -186,8 +186,8 @@ func emitFormalLoopReturnStmt(s *ast.ReturnStmt, env *formalEnv, state formalLoo
 	}
 	stop := env.temp("stop")
 	done := env.temp("done")
-	buf.WriteString(fmt.Sprintf("    %s = arith.constant true\n", stop))
-	buf.WriteString(fmt.Sprintf("    %s = arith.constant true\n", done))
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant true", stop))
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant true", done))
 	return buf.String(), formalLoopReturnState{
 		stop:      stop,
 		done:      done,
@@ -198,7 +198,7 @@ func emitFormalLoopReturnStmt(s *ast.ReturnStmt, env *formalEnv, state formalLoo
 
 func emitFormalLoopBreakState(env *formalEnv, state formalLoopReturnState) (string, formalLoopReturnState, bool) {
 	stop := env.temp("stop")
-	return fmt.Sprintf("    %s = arith.constant true\n", stop), formalLoopReturnState{
+	return emitFormalLinef(nil, env, "    %s = arith.constant true", stop), formalLoopReturnState{
 		stop:      stop,
 		done:      state.done,
 		retValues: append([]string(nil), state.retValues...),
@@ -260,13 +260,15 @@ func emitFormalLoopReturnIfStmt(s *ast.IfStmt, suffix []ast.Stmt, env *formalEnv
 	result := env.temp("loopif")
 	var buf strings.Builder
 	buf.WriteString(prelude)
-	buf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(state.retTypes)+2), cond, strings.Join(formalLoopReturnResultTypes(state), ", ")))
-	buf.WriteString(indentBlock(thenText, 2))
-	buf.WriteString(emitFormalLoopReturnYield(thenState))
-	buf.WriteString("    } else {\n")
-	buf.WriteString(indentBlock(elseText, 2))
-	buf.WriteString(emitFormalLoopReturnYield(elseState))
-	buf.WriteString("    }\n")
+	var ifBuf strings.Builder
+	ifBuf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(state.retTypes)+2), cond, strings.Join(formalLoopReturnResultTypes(state), ", ")))
+	ifBuf.WriteString(indentBlock(thenText, 2))
+	ifBuf.WriteString(emitFormalLoopReturnYield(thenState, env))
+	ifBuf.WriteString("    } else {\n")
+	ifBuf.WriteString(indentBlock(elseText, 2))
+	ifBuf.WriteString(emitFormalLoopReturnYield(elseState, env))
+	ifBuf.WriteString("    }\n")
+	buf.WriteString(annotateFormalStructuredOp(ifBuf.String(), s, env))
 	syncFormalTempID(env, thenEnv, elseEnv)
 	return buf.String(), formalLoopReturnRefs(result, state), true
 }
@@ -324,14 +326,16 @@ func emitFormalLoopBreakIfStmt(s *ast.IfStmt, suffix []ast.Stmt, env *formalEnv,
 	result := env.temp("loopif")
 	var buf strings.Builder
 	buf.WriteString(prelude)
-	buf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(state.retTypes)+2), cond, strings.Join(formalLoopReturnResultTypes(state), ", ")))
-	buf.WriteString(indentBlock(thenPrefix, 2))
-	buf.WriteString(indentBlock(thenBreak, 2))
-	buf.WriteString(emitFormalLoopReturnYield(thenState))
-	buf.WriteString("    } else {\n")
-	buf.WriteString(indentBlock(elseText, 2))
-	buf.WriteString(emitFormalLoopReturnYield(elseState))
-	buf.WriteString("    }\n")
+	var ifBuf strings.Builder
+	ifBuf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(state.retTypes)+2), cond, strings.Join(formalLoopReturnResultTypes(state), ", ")))
+	ifBuf.WriteString(indentBlock(thenPrefix, 2))
+	ifBuf.WriteString(indentBlock(thenBreak, 2))
+	ifBuf.WriteString(emitFormalLoopReturnYield(thenState, env))
+	ifBuf.WriteString("    } else {\n")
+	ifBuf.WriteString(indentBlock(elseText, 2))
+	ifBuf.WriteString(emitFormalLoopReturnYield(elseState, env))
+	ifBuf.WriteString("    }\n")
+	buf.WriteString(annotateFormalStructuredOp(ifBuf.String(), s, env))
 	syncFormalTempID(env, thenEnv, elseEnv)
 	return buf.String(), formalLoopReturnRefs(result, state), true
 }
@@ -434,12 +438,14 @@ func emitFormalLoopReturnSuffix(prefix string, state formalLoopReturnState, suff
 	result := env.temp("loopcont")
 	var buf strings.Builder
 	buf.WriteString(prefix)
-	buf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(state.retTypes)+2), state.stop, strings.Join(formalLoopReturnResultTypes(state), ", ")))
-	buf.WriteString(emitFormalLoopReturnYield(state))
-	buf.WriteString("    } else {\n")
-	buf.WriteString(indentBlock(restText, 2))
-	buf.WriteString(emitFormalLoopReturnYield(restState))
-	buf.WriteString("    }\n")
+	var ifBuf strings.Builder
+	ifBuf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(state.retTypes)+2), state.stop, strings.Join(formalLoopReturnResultTypes(state), ", ")))
+	ifBuf.WriteString(emitFormalLoopReturnYield(state, env))
+	ifBuf.WriteString("    } else {\n")
+	ifBuf.WriteString(indentBlock(restText, 2))
+	ifBuf.WriteString(emitFormalLoopReturnYield(restState, env))
+	ifBuf.WriteString("    }\n")
+	buf.WriteString(annotateFormalStructuredOp(ifBuf.String(), nil, env))
 	syncFormalTempID(env, restEnv)
 	return buf.String(), formalLoopReturnRefs(result, state), true
 }
@@ -484,12 +490,14 @@ func emitFormalReturningLoopRegion(stmt ast.Stmt, remaining []ast.Stmt, env *for
 	var buf strings.Builder
 	buf.WriteString(initPrelude)
 	buf.WriteString(loopText)
-	buf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), loopState.done, strings.Join(resultTypes, ", ")))
-	buf.WriteString(emitFormalYieldLine(loopState.retValues, loopState.retTypes))
-	buf.WriteString("    } else {\n")
-	buf.WriteString(indentBlock(restBody, 2))
-	buf.WriteString(emitFormalYieldLine(restValues, restTypes))
-	buf.WriteString("    }\n")
+	var ifBuf strings.Builder
+	ifBuf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), loopState.done, strings.Join(resultTypes, ", ")))
+	ifBuf.WriteString(emitFormalYieldLine(loopState.retValues, loopState.retTypes, env))
+	ifBuf.WriteString("    } else {\n")
+	ifBuf.WriteString(indentBlock(restBody, 2))
+	ifBuf.WriteString(emitFormalYieldLine(restValues, restTypes, env))
+	ifBuf.WriteString("    }\n")
+	buf.WriteString(annotateFormalStructuredOp(ifBuf.String(), stmt, env))
 	syncFormalTempID(env, restEnv)
 	return buf.String(), formalMultiResultRefs(result, len(resultTypes)), append([]string(nil), resultTypes...), len(remaining) + 1, true
 }

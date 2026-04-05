@@ -17,6 +17,9 @@ Go source -> go/ast -> formal MLIR / go dialect bridge
 
 但整体 lowering 仍然是 AST-driven，不是 SSA-driven，也还不是完全 typed-first。
 
+另外，从当前这轮开始，Go `int` / `uint` / `uintptr` 已经按 target-sized 规则 lower，而不是固定 `i32`。
+因此下面示例里如果出现旧的 `i32` 片段，应把它理解成“结构示意”；在 64 位 target 上，同类 `int` 位置现在会实际打印成 `i64`。
+
 因此，下面所有“前后变化”的例子，描述的都是 **Go 源码 / AST 形态** 到 **formal MLIR** 的变化，不是 `x/tools/go/ssa` 指令逐条导入。
 
 ## 复现实例
@@ -34,26 +37,49 @@ formal FileCheck 和 LLVM FileCheck 分别在：
 
 ## 文件与函数族索引
 
+当前 `formal_*` 辅助文件按语义前缀分组：
+
+- `formal_core_*`：module/env/symbol/type inference 这类共享底座
+- `formal_control_*`：`block/if/loop/range/returning` 这类结构化控制流辅助
+- `formal_memory_*`：地址化、赋值、分配、聚合初始化
+- `formal_call_*`：builtin、method、stdlib call 建模
+- `formal_type_*`：常量 materialize、类型转换和 coercion
+
 下面这张表按文件列出主要 lowering 入口、职责和建议先看的例子。
 
 | 文件 | 主要函数族 | 负责什么 | 建议先看 |
 | --- | --- | --- | --- |
 | `internal/gofrontend/compiler.go` | `CompileFile` `CompileFileFormal` `parseModule` | 读取单文件、排序函数、拼 module 外壳 | `default_simple_add.go` |
-| `internal/gofrontend/formal.go` | `emitFormalFunc` `emitFormalFuncBody` `emitFormalStmt` `emitFormalExpr` `emitFormalIfStmt` `emitFormalForStmt` `emitFormalRangeStmt` `emitFormalCallExpr` `emitFormalFuncLitExpr` `emitFormalZeroValue` | 核心语句/表达式分发与默认 fallback | `default_simple_add.go` `if_merge.go` `classic_for.go` `func_literal_callback.go` |
-| `internal/gofrontend/formal_assign.go` | `emitFormalAssignStmt` `emitFormalExpandedAssignStmt` `emitFormalAssignTargetValue` | 标识符赋值、`_` 丢弃、selector/index/deref 赋值 | `assign_targets.go` |
-| `internal/gofrontend/formal_block.go` | `emitFormalFuncBlock` `emitFormalRegionBlock` | block 扫描、returning-region matcher 接线 | `prefixed_returning_if.go` `range_return.go` |
-| `internal/gofrontend/formal_branch.go` | `emitFormalLoopBody` | loop body 中的 `continue` 形态和 carried value | `range_continue.go` `range_continue_prefix.go` |
-| `internal/gofrontend/formal_builtins.go` | `emitFormalBuiltinCall` `emitFormalLenCapBuiltinCall` `emitFormalAppendBuiltinCall` `emitFormalAppendSliceBuiltinCall` `emitFormalGoLenValue` `emitFormalIndexedReadValue` `emitFormalGoIndexValue` | `len/cap/index/append/append(dst, src...)` 的直接 `go.*` op 路径；slice 索引优先地址化 | `len_builtin.go` `cap_builtin.go` `index_builtin.go` `append_builtin.go` `append_spread_builtin.go` |
-| `internal/gofrontend/formal_composite.go` | `emitFormalCompositeLitExpr` | 空 slice literal 和 typed helper composite literal | `empty_slice_literal.go` |
-| `internal/gofrontend/formal_condition.go` | `emitFormalCondition` | 任意条件表达式到 `i1` 的 coercion | `helper_condition.go` |
-| `internal/gofrontend/formal_convert.go` | `emitFormalStarExpr` `emitFormalTypeAssertExpr` `emitFormalCoerceValue` `emitFormalIntegerCast` `emitFormalHelperMakeCall` | 解引用、类型断言、返回值 coercion、整数 cast、非 slice `make` helper | `type_assert_and_star.go` `int64_conversion.go` `return_coercion.go` `make_map.go` |
-| `internal/gofrontend/formal_if.go` | `emitFormalIfStmtWithInit` `emitFormalVoidReturningIfStmt` `emitFormalVoidReturningRegion` `emitFormalVoidBranchRegion` | `if init; cond` 和 void-returning `if` | `if_init.go` `void_returning_if.go` |
-| `internal/gofrontend/formal_loop_return.go` | `emitFormalReturningLoopStmt` `emitFormalLoopReturnStmt` `emitFormalLoopReturnIfStmt` `emitFormalLoopBreakIfStmt` `emitFormalLoopReturnSequence` `emitFormalReturningLoopRegion` | loop body 内的函数级 early return / break | `range_return.go` `for_break_return.go` |
-| `internal/gofrontend/formal_loop_return_stmt.go` | `emitFormalForLoopReturnState` `emitFormalRangeLoopReturnState` | `for/range` 上的 `scf.for iter_args(stop, done, ret...)` 形态 | `range_return.go` `for_break_return.go` |
-| `internal/gofrontend/formal_methods.go` | `emitFormalMethodCallExpr` `emitFormalMethodCallStmt` | 立即 method call 到稳定的 `package.receiver.method` 符号调用 | `method_call.go` |
-| `internal/gofrontend/formal_range.go` | `inferFormalRangeValueType` `inferFormalIdentUsageType` `inferFormalIdentContextType` `formalCallArgHint` | `range` 变量类型提示与上下文传播 | `range_slice.go` `selector_string_compare.go` |
-| `internal/gofrontend/formal_returning.go` | `emitFormalReturnExprOperands` `emitFormalYieldLine` | 多返回值 return / yield operand 组装 | `multi_return_if.go` |
-| `internal/gofrontend/formal_state.go` | `formalModuleContext` `formalEnv` `newFormalModuleContext` `newFormalEnv` | module 级 extern/generated func 管理，函数级 SSA/temp 状态 | `func_literal_callback.go` `selector_value.go` |
+| `internal/gofrontend/formal.go` | `emitFormalFunc` `emitFormalFuncBody` `emitFormalStmt` `emitFormalExpr` | 顶层函数壳子、主语句分发、主表达式分发 | `default_simple_add.go` |
+| `internal/gofrontend/formal_core_helpers.go` | `emitFormalHelperCall` `chooseFormalCommonType` `normalizeFormalType` `isFormalTypeExpr` | `formal_*` 共享 helper、占位类型规则、类型表达式识别 | `make_map.go` `assign_targets.go` |
+| `internal/gofrontend/formalruntime/abi.go` | `AnyBoxSymbol` `MakeHelperSymbol` `CompositeHelperSymbol` `NewHelperSymbol` | 第一批真正拆出的子包：纯 runtime ABI 命名规则和稳定 helper 符号族 | `make_map.go` `string_call.go` |
+| `internal/gofrontend/formal_runtime_abi.go` | `formalRuntimeSymbol` `formalRuntimeAnyBoxSymbol` `formalRuntimeMakeHelperSymbol` | `gofrontend` 包内对 `formalruntime/` 的薄适配层，继续负责类型后缀和 composite key 提取 | `make_map.go` `string_call.go` |
+| `internal/gofrontend/formal_runtime.go` | `emitFormalRuntimeCall` `emitFormalRuntimePackAnyArgs` `emitFormalRuntimeNewObject` | frontend 侧统一 runtime ABI：`newobject`、`runtime.make.*`、`runtime.fmt.*`、`runtime.any.box.*` | `make_map.go` `string_call.go` `new_builtin.go` |
+| `internal/gofrontend/formal_control_stmt.go` | `emitFormalReturnStmt` `emitFormalDeclStmt` `emitFormalIfStmt` `emitFormalForStmt` `emitFormalRangeStmt` | 语句级 lowering，包括 `if/for/range` 和局部声明 | `if_merge.go` `classic_for.go` `range_slice.go` |
+| `internal/gofrontend/formal_control_return_dispatch.go` | `emitFormalTerminatingIfStmt` `emitFormalReturningIfStmt` `emitFormalReturningRegion` `emitFormalReturnValues` | returning-region 识别、`if` early-return merge、return 默认值组装 | `prefixed_returning_if.go` `multi_return_if.go` |
+| `internal/gofrontend/formal_type_expr.go` | `emitFormalBinaryExpr` `emitFormalUnaryExpr` `emitFormalZeroValue` `emitFormalTodoValue` | 通用二元/一元表达式、`go.eq/go.neq`、零值和 todo value | `default_simple_add.go` `selector_string_compare.go` |
+| `internal/gofrontend/formal_call_dispatch.go` | `emitFormalCallExpr` `emitFormalCallStmt` `emitFormalFuncLitExpr` `formalExprFuncSig` | 通用 call dispatch、函数值/`FuncLit`、以及 stdlib/runtime facade 接线 | `single_arg_call.go` `func_literal_callback.go` `string_call.go` |
+| `internal/gofrontend/formal_memory_assign.go` | `emitFormalAssignStmt` `emitFormalExpandedAssignStmt` `emitFormalAssignTargetValue` | 标识符赋值、`_` 丢弃、selector/index/deref 赋值 | `assign_targets.go` |
+| `internal/gofrontend/formal_control_block.go` | `emitFormalFuncBlock` `emitFormalRegionBlock` | block 扫描、returning-region matcher 接线 | `prefixed_returning_if.go` `range_return.go` |
+| `internal/gofrontend/formal_control_branch.go` | `emitFormalLoopBody` `emitFormalLoopBodyWithCarried` | loop body 中的 `continue` 形态，以及单/多 carried value 的 `scf.if` yield | `range_continue.go` `range_continue_prefix.go` `range_multi_iter_args.go` |
+| `internal/gofrontend/formal_call_builtins.go` | `emitFormalBuiltinCall` `emitFormalLenCapBuiltinCall` `emitFormalAppendBuiltinCall` `emitFormalAppendSliceBuiltinCall` `emitFormalGoLenValue` `emitFormalIndexedReadValue` `emitFormalGoIndexValue` | `len/cap/index/append/append(dst, src...)` 的直接 `go.*` op 路径；slice 索引优先地址化 | `len_builtin.go` `cap_builtin.go` `index_builtin.go` `append_builtin.go` `append_spread_builtin.go` |
+| `internal/gofrontend/formal_memory_ops.go` | `emitFormalIndexExpr` `emitFormalSelectorExpr` `emitFormalFieldAddr` `emitFormalElemAddr` `emitFormalLoad` `emitFormalStore` | selector/index 读写、最小地址化桥接、`go.field_addr` / `go.elem_addr` / `go.load` / `go.store` | `index_builtin.go` `selector_value.go` `assign_targets.go` |
+| `internal/gofrontend/formal_memory_composite.go` | `emitFormalCompositeLitExpr` | 空 slice literal 和 typed helper composite literal | `empty_slice_literal.go` |
+| `internal/gofrontend/formal_control_condition.go` | `emitFormalCondition` | 任意条件表达式到 `i1` 的 coercion | `helper_condition.go` |
+| `internal/gofrontend/formal_type_convert.go` | `emitFormalStarExpr` `emitFormalTypeAssertExpr` `emitFormalCoerceValue` `emitFormalIntegerCast` | 解引用、类型断言、返回值 coercion、整数/浮点 cast | `type_assert_and_star.go` `int64_conversion.go` `return_coercion.go` `float_binary.go` |
+| `internal/gofrontend/formal_control_if.go` | `emitFormalIfStmtWithInit` `emitFormalVoidReturningIfStmt` `emitFormalVoidReturningRegion` `emitFormalVoidBranchRegion` | `if init; cond` 和 void-returning `if` | `if_init.go` `void_returning_if.go` |
+| `internal/gofrontend/formal_control_loop_return.go` | `emitFormalReturningLoopStmt` `emitFormalLoopReturnStmt` `emitFormalLoopReturnIfStmt` `emitFormalLoopBreakIfStmt` `emitFormalLoopReturnSequence` `emitFormalReturningLoopRegion` | loop body 内的函数级 early return / break | `range_return.go` `for_break_return.go` |
+| `internal/gofrontend/formal_control_loop_return_stmt.go` | `emitFormalForLoopReturnState` `emitFormalRangeLoopReturnState` | `for/range` 上的 `scf.for iter_args(stop, done, ret...)` 形态 | `range_return.go` `for_break_return.go` |
+| `internal/gofrontend/formal_call_methods.go` | `emitFormalMethodCallExpr` `emitFormalMethodCallStmt` | 立即 method call 到稳定的 `package.receiver.method` 符号调用 | `method_call.go` |
+| `internal/gofrontend/formalstdlib/model.go` | `Lookup` `CallModel` `ResultKind` `ArgHintKind` | 第一批真正拆出的子包：声明式 stdlib registry，统一 `fmt/strings/errors` 的 runtime ABI 选择 | `string_call.go` `stdlib_alias_calls.go` |
+| `internal/gofrontend/formal_call_stdlib.go` | `inferFormalStdlibCallResultType` `inferFormalStdlibCallArgHint` `emitFormalStdlibCall` `emitFormalStdlibCallStmt` | `gofrontend` 包内把 `formalstdlib/` 的声明式 model 接到真实 lowering，包括 `fmt` variadic/runtime ABI 和 `strings/errors` wrapper | `string_call.go` `stdlib_alias_calls.go` |
+| `internal/gofrontend/formal_control_range.go` | `inferFormalRangeValueType` `inferFormalIdentUsageType` `inferFormalIdentContextType` `formalCallArgHint` | `range` 变量类型提示与上下文传播 | `range_slice.go` `selector_string_compare.go` |
+| `internal/gofrontend/formal_control_returning.go` | `emitFormalReturnExprOperands` `emitFormalYieldLine` | 多返回值 return / yield operand 组装 | `multi_return_if.go` |
+| `internal/gofrontend/formal_core_types.go` | `formalFuncSig` `formalFuncBodySpec` `formalHelperCallSpec` | core 共享数据结构和签名/函数体描述 | `func_literal_callback.go` |
+| `internal/gofrontend/formal_core_env.go` | `formalEnv` `newFormalEnv` `syncFormalTempID` | 函数级 SSA/temp/local state | `selector_value.go` |
+| `internal/gofrontend/formal_core_module.go` | `formalModuleContext` `newFormalModuleContext` `formalFuncSymbol` | module 级 extern/generated func 管理、receiver/top-level 命名 | `func_literal_callback.go` `selector_value.go` |
+| `internal/gofrontend/formal_core_loc.go` | `emitFormalLinef` `annotateFormalStructuredOp` `formalLocationSuffix` | formal 文本里的 `loc(...)` 和 scope label 格式化 | `goeq_scope_locations.go` |
+| `internal/gofrontend/formal_core_api.go` | `registerFormalExtern` `reserveFormalFuncLitSymbol` `lookupFormalDefinedFuncSig` | core facade：给 call/runtime/symbol 层提供较窄的 module 访问面 | `string_call.go` `func_literal_callback.go` |
 
 ## Core Dispatch
 
@@ -73,11 +99,11 @@ func add(a int, b int) int {
 变化后：
 
 ```mlir
-module {
-  func.func @demo.add(%a: i32, %b: i32) -> i32 {
-    %bin3 = arith.addi %a, %b : i32
-    return %bin3 : i32
-  }
+module attributes {go.scope_table = [...]} {
+  func.func @demo.add(%a: i32, %b: i32) -> i32 attributes {go.scope = 0 : i64} {
+    %bin3 = arith.addi %a, %b : i32 loc("scope0"("testdata/default_simple_add.go":5:7))
+    return %bin3 : i32 loc("scope0"("testdata/default_simple_add.go":6:2))
+  } loc("scope0"("testdata/default_simple_add.go":4:1))
 }
 ```
 
@@ -86,6 +112,7 @@ module {
 - `emitFormalParams`：`a int, b int` 变成 `%a: i32, %b: i32`
 - `emitFormalBinaryExpr`：`a + b` 变成 `arith.addi`
 - `emitFormalReturnStmt`：`return c` 变成 `return %bin3 : i32`
+- `formal_core_module.go + formal_core_loc.go`：module 会额外挂出 `go.scope_table`，函数和 op 带上 `go.scope` / `loc(...)`，必要时优先使用 `MLSE_SOURCE_DISPLAY_PATH` 作为展示路径
 
 ## If, Merge And Returning Regions
 
@@ -355,11 +382,11 @@ h.X = value
 变化后：
 
 ```mlir
-%store7 = func.call @__mlse_store_index__go.named__map__(%m, %key, %value) : (!go.named<"map">, !go.string, i32) -> !go.named<"map">
+%store7 = func.call @runtime.store.index.map(%m, %key, %value) : (!go.named<"map">, !go.string, i32) -> !go.named<"map">
 %const10 = arith.constant 0 : i32
 %elem11 = go.elem_addr %xs, %const10 : (!go.slice<i32>, i32) -> !go.ptr<i32>
 go.store %value, %elem11 : i32 to !go.ptr<i32>
-%field14 = go.field_addr %h, "X" : !go.ptr<!go.named<"holder">> -> !go.ptr<i32>
+%field14 = go.field_addr %h, "X" {offset = 0 : i64} : !go.ptr<!go.named<"holder">> -> !go.ptr<i32>
 go.store %value, %field14 : i32 to !go.ptr<i32>
 %global17 = func.call @defaultValue() : () -> !go.ptr<i32>
 go.store %value, %global17 : i32 to !go.ptr<i32>
@@ -368,7 +395,7 @@ go.store %value, %global17 : i32 to !go.ptr<i32>
 当前策略现在分成两层：
 
 1. 对 concrete pointer / named aggregate 上的 selector 写入、slice 下标写入、以及 `*ptr = v`，优先产出 `go.elem_addr` / `go.field_addr` / `go.store`
-2. 对当前还拿不到稳定地址模型的目标，例如 `map` index 更新，仍保留 helper 路径
+2. 对当前还拿不到稳定地址模型的目标，例如 `map` index 更新，仍保留 helper 路径；但这类 helper 当前已经统一并入 `runtime.store.index.*`
 
 ## Builtins, Aggregate Ops And Composite Values
 
@@ -445,7 +472,29 @@ m := make(map[string]bool)
 变化后：
 
 ```mlir
-%make3 = func.call @__mlse_make__go.named__map__() : () -> !go.named<"map">
+%make3 = func.call @runtime.make.map() : () -> !go.named<"map">
+```
+
+### `fmt.Sprintf` 与 `...any`
+
+fixture：`internal/gofrontend/testdata/string_call.go`
+
+变化前：
+
+```go
+return fmt.Sprintf("hello %s", name)
+```
+
+变化后：
+
+```mlir
+%argc3 = arith.constant 1 : i64
+%args4 = go.make_slice %argc3, %argc3 : i64 to !go.slice<!go.named<"any">>
+%any5 = func.call @runtime.any.box.string(%name) : (!go.string) -> !go.named<"any">
+%argi6 = arith.constant 0 : i64
+%slot7 = go.elem_addr %args4, %argi6 : (!go.slice<!go.named<"any">>, i64) -> !go.ptr<!go.named<"any">>
+go.store %any5, %slot7 : !go.named<"any">, !go.ptr<!go.named<"any">>
+%call8 = func.call @runtime.fmt.Sprintf(%str2, %args4) : (!go.string, !go.slice<!go.named<"any">>) -> !go.string
 ```
 
 ## Methods And Function Values
@@ -542,7 +591,7 @@ if x {
 变化后：
 
 ```mlir
-%conv2 = func.call @__mlse_convert__go.named__any____to__i1(%x) : (!go.named<"any">) -> i1
+%conv2 = func.call @runtime.convert.any.to.bool(%x) : (!go.named<"any">) -> i1
 %ifret3 = scf.if %conv2 -> (i32) {
     ...
 }
@@ -562,7 +611,7 @@ _ = *p
 变化后：
 
 ```mlir
-%typeassert3 = func.call @__mlse_type_assert___go.named__any____to__i1(%x) : (!go.named<"any">) -> i1
+%typeassert3 = func.call @runtime.type.assert.any.to.bool(%x) : (!go.named<"any">) -> i1
 %load16 = go.load %p : !go.ptr<i32> -> i32
 ```
 
@@ -576,7 +625,7 @@ fixtures：
 变化后示意：
 
 ```mlir
-%conv17 = func.call @__mlse_convert__go.named__value____to___go.string(%index12) : (!go.named<"value">) -> !go.string
+%conv17 = func.call @runtime.convert.value.to.string(%index12) : (!go.named<"value">) -> !go.string
 %const3 = arith.constant 0 : i64
 ```
 
@@ -593,13 +642,13 @@ return v == nil
 变化后：
 
 ```mlir
-%zero3 = func.call @__mlse_zero__go.named__Result__() : () -> !go.named<"Result">
-%cmp4 = func.call @__mlse_eq__go.named__Result__(%v, %zero3) : (!go.named<"Result">, !go.named<"Result">) -> i1
+%zero3 = func.call @runtime.zero.Result() : () -> !go.named<"Result">
+%cmp4 = func.call @runtime.eq.Result(%v, %zero3) : (!go.named<"Result">, !go.named<"Result">) -> i1
 ```
 
 ## State, Externs And Generated Functions
 
-`formal_state.go` 不是直接 lowering AST 节点，但决定了输出是否可继续走后续 pipeline：
+`formal_core_env.go` / `formal_core_module.go` / `formal_core_api.go` 不直接 lowering AST 节点，但决定了输出是否可继续走后续 pipeline：
 
 - `formalEnv`
   - 记录局部变量当前 SSA 名、推断类型和临时值编号
@@ -619,16 +668,19 @@ return v == nil
 
 1. `compiler.go`
 2. `formal.go`
-3. `formal_state.go`
-4. `formal_block.go`
-5. `formal_if.go`
-6. `formal_loop_return.go`
-7. `formal_loop_return_stmt.go`
-8. `formal_assign.go`
-9. `formal_builtins.go`
-10. `formal_convert.go`
-11. `formal_methods.go`
-12. `formal_composite.go`
-13. `formal_range.go`
+3. `formal_core_env.go`
+4. `formal_core_module.go`
+5. `formal_core_api.go`
+6. `formal_control_block.go`
+7. `formal_control_if.go`
+8. `formal_control_loop_return.go`
+9. `formal_control_loop_return_stmt.go`
+10. `formal_memory_assign.go`
+11. `formal_call_dispatch.go`
+10. `formal_call_builtins.go`
+11. `formal_type_convert.go`
+12. `formal_call_methods.go`
+13. `formal_memory_composite.go`
+14. `formal_control_range.go`
 
 这样可以先建立“主调度器 -> block/region -> 特例 lowering -> helper/value family”的心智模型，再去追具体长尾语义。
