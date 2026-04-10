@@ -10,6 +10,7 @@
 - [go-frontend.md](go-frontend.md): Go 前端 MVP 的能力边界、临时 stub 和后续扩展方向。
 - [go-frontend-lowering.md](go-frontend-lowering.md): `internal/gofrontend/formal_*` 的 lowering 入口地图与源码前后对照示例。
 - [goir-dialect.md](goir-dialect.md): 正式 `go` dialect 的 TableGen/CMake bootstrap、当前边界和构建方式。
+- [execution.md](execution.md): 计划中的 `mlse-run` 执行层、共享执行内核、语言 runtime bundle 和差分测试策略。
 - [dev-setup.md](dev-setup.md): 当前可用脚本、目录约定以及 tinygo 实验入口。
 
 ## 建议后续补充的文档

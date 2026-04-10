@@ -29,6 +29,7 @@ cmake -S "$ROOT" -B "$BUILD_DIR" \
   -DCMAKE_CXX_COMPILER="$CMAKE_CXX_COMPILER" \
   -DCMAKE_CXX_FLAGS="-isysroot $SDKROOT"
 
-cmake --build "$BUILD_DIR" --target mlse-opt -j4
+cmake --build "$BUILD_DIR" --target mlse-opt mlse-run -j4
 
 echo "built: $BUILD_DIR/tools/mlse-opt/mlse-opt"
+echo "built: $BUILD_DIR/tools/mlse-run/mlse-run"

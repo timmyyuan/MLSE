@@ -163,6 +163,12 @@ run_go_bootstrap_lowering_tests() {
   printf 'summary: 1/1 passed\n'
 }
 
+run_go_exec_diff_tests() {
+  local script="$ROOT/scripts/go-exec-diff-suite.py"
+  run_checked "go-exec-diff-suite" python3 "$script" --skip-build
+  printf 'summary: 1/1 passed\n'
+}
+
 print_section "go"
 "$ROOT/scripts/test.sh"
 go test ./linters
@@ -175,6 +181,7 @@ print_section "mlir-build"
 
 MLSE_OPT=${MLSE_OPT:-$ROOT/tmp/cmake-mlir-build/tools/mlse-opt/mlse-opt}
 MLSE_GO=${MLSE_GO:-$ROOT/artifacts/bin/mlse-go}
+MLSE_RUN=${MLSE_RUN:-$ROOT/tmp/cmake-mlir-build/tools/mlse-run/mlse-run}
 OUT_DIR=${OUT_DIR:-$ROOT/tmp/test-all}
 
 if [[ ! -x "$MLSE_OPT" ]]; then
@@ -184,6 +191,11 @@ fi
 
 if [[ ! -x "$MLSE_GO" ]]; then
   echo "error: mlse-go not found at $MLSE_GO" >&2
+  exit 1
+fi
+
+if [[ ! -x "$MLSE_RUN" ]]; then
+  echo "error: mlse-run not found at $MLSE_RUN" >&2
   exit 1
 fi
 
@@ -198,6 +210,9 @@ run_go_bootstrap_lowering_tests "$MLSE_OPT" "$OUT_DIR"
 
 print_section "frontend-bridge"
 run_frontend_bridge_tests "$MLSE_OPT" "$MLSE_GO" "$OUT_DIR"
+
+print_section "go-exec-diff"
+run_go_exec_diff_tests
 
 echo
 echo "all tests passed"

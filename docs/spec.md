@@ -14,6 +14,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 
 - 将 `C/C++/Python/Go` 程序转换为 `MLIR`。
 - 支持将 `MLIR` 继续 lowering 成 `LLVM IR`。
+- 提供一个共享 IR 执行层，用来解释执行 MLSE 当前生成的 MLIR / LLVM IR 子集，并服务语义差分验证。
 
 MLSE 不是单一语言编译器，而是一个统一的多语言前端和共享后端框架。它的价值在于把不同语言映射到可分析、可优化、可复用的中间表示，再复用同一条 MLIR 到 LLVM 的后端链路。
 
@@ -35,10 +36,15 @@ MLSE 第一阶段至少应支持以下输出模式：
 - `source -> LLVM IR`
 - `MLIR -> LLVM IR`
 
+建议同时补一条执行验证路径：
+
+- `MLIR / LLVM IR -> observable program behavior`
+
 ### 2.3 成功标准
 
 - 开发者可以通过统一命令对受支持语言子集生成 MLIR。
 - 开发者可以对手写或前端生成的 MLIR 稳定输出 LLVM IR。
+- 开发者可以对 MLSE 当前生成的 IR 子集执行，并比较原生程序与 `mlse-run` 的 stdout / stderr。
 - 每种语言至少有一个清晰定义的“可运行子集”和对应测试集。
 - IR 结果可以被 golden test、round-trip test 或 pass-level test 验证。
 
@@ -115,6 +121,7 @@ Source Code
 - `Passes`：负责 canonicalization、normalization、合法化和 lowering。
 - `Backend`：负责 `MLIR -> LLVM dialect -> LLVM IR`。
 - `Runtime`：负责需要运行时支持的语言特性封装。
+- `Execution`：负责共享解释执行内核、IR importer、stdout/stderr 捕获和语言 runtime bundle。
 - `Testing`：负责 IR golden、前端语义、后端集成和回归测试。
 
 对于 `C/C++`，建议在总体架构中加入一条明确的 `CIR` 通路：
@@ -155,6 +162,12 @@ MLSE 的 canonical IR 应优先复用标准 MLIR dialect：
 
 - `mlse.core`：承载标准 dialect 难以覆盖的跨语言语义节点。
 - `mlse.runtime`：承载运行时调用、辅助元数据和后续 runtime lowering。
+
+对于执行层，建议同时明确一条稳定 runtime ABI 边界：
+
+- frontend / dialect / lowering 负责把语言语义收口到 runtime ABI
+- `mlse-run` 通过语言 runtime bundle 实现这些 ABI
+- 共享执行内核不直接内建 Go 或 Python 语义
 
 ### 7.3 不建议长期保留重型语言专属 dialect
 
@@ -321,14 +334,34 @@ MLSE 的 canonical IR 应优先复用标准 MLIR dialect：
 - runtime dialect 必须有明确的 lowering 目标，不能长期停留在抽象层。
 - `CIR` 需要被视为后端合法输入之一，至少支持 `CIR -> LLVM IR` 的稳定路径。
 
-## 10. 推荐实现语言与技术栈
+## 10. 执行层规划：IR 到可观测行为
 
-### 10.1 核心实现
+MLSE 建议增加一个共享执行层：
+
+- 工具：`mlse-run`
+- 输入：MLSE 当前生成的 MLIR / LLVM IR 子集
+- 输出：程序的可观测行为，例如 stdout / stderr、panic 和退出状态
+
+设计原则：
+
+- `mlse-run` 不重做一套 Go 或 Python 源码解释器
+- `mlse-run` 以共享执行内核为主，语言差异通过 runtime bundle 注入
+- 第一期优先支持 MLSE 当前生成的 LLVM-legal MLIR 及其对应 LLVM IR 子集
+
+执行层的主要价值不是替代 native codegen，而是提供一条可自动化的语义差分路径：
+
+- 原生语言执行
+- MLSE lowering 后 IR 执行
+- 对比 stdout / stderr
+
+## 11. 推荐实现语言与技术栈
+
+### 11.1 核心实现
 
 - 核心编译驱动、dialect、pass、后端建议使用 `C++` 实现。
 - 原因是 MLIR/LLVM 的核心 API 和生态主要集中在 C++。
 
-### 10.2 LLVM/Clang 依赖策略
+### 11.2 LLVM/Clang 依赖策略
 
 - `C/C++` 路线建议直接基于启用 `CIR` 的 Clang 构建。
 - 优先选择可复现的固定版本来源：
@@ -336,19 +369,19 @@ MLSE 的 canonical IR 应优先复用标准 MLIR dialect：
   - 或包含足够 `CIR` upstream 内容的 `llvm-project` 固定 revision
 - 构建时需要启用 `mlir` 与 `clang`，并打开 `CLANG_ENABLE_CIR=ON`。
 
-### 10.3 辅助实现
+### 11.3 辅助实现
 
 - Python 可用于 Python 前端原型、测试驱动和开发脚本。
 - Go 前端可以用 Go 自身工具链实现语义分析，再通过稳定接口接入核心驱动。
 
-### 10.4 构建与测试
+### 11.4 构建与测试
 
 - 构建系统建议使用 `CMake + Ninja`。
 - 单元测试建议使用 `gtest`。
 - IR 测试建议使用 `lit + FileCheck`。
 - 端到端测试建议使用 golden files 和示例程序。
 
-### 10.5 Docker 运行与开发环境
+### 11.5 Docker 运行与开发环境
 
 MLSE 的官方支持运行环境应以 `Docker` 为基线。
 
@@ -384,7 +417,7 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 - 当前仓库尚未实现这些文件和命令。
 - 这里定义的是后续工程骨架必须满足的接口方向。
 
-### 10.6 标准脚本与命令约定
+### 11.6 标准脚本与命令约定
 
 为了避免把构建、测试和质量检查逻辑散落在文档、CI 和个人 shell 历史中，MLSE 应约定统一脚本入口。
 
@@ -403,7 +436,7 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 - 输出路径和临时目录保持稳定，便于清理。
 - 一旦命令接口公开到 README 或 CI，就视为工程契约的一部分。
 
-## 11. 推荐仓库结构
+## 12. 推荐仓库结构
 
 ```text
 .
@@ -412,27 +445,39 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 │   ├── README.md
 │   ├── spec.md
 │   ├── architecture.md
+│   ├── execution.md
 │   └── dev-setup.md
 ├── docker/
 ├── cmake/
 ├── third_party/
 │   └── llvm-project/ or clangir/
 ├── include/mlse/
+│   └── Execution/
 ├── lib/
 │   ├── Dialect/
 │   ├── Conversion/
+│   ├── Execution/
+│   │   ├── Core/
+│   │   └── Import/
 │   ├── Frontend/
 │   │   ├── C/
 │   │   ├── CXX/
 │   │   ├── Python/
 │   │   └── Go/
+│   ├── Go/
+│   │   └── Execution/
+│   ├── Python/
+│   │   └── Execution/
 │   ├── Driver/
 │   └── Runtime/
 ├── tools/
 │   ├── mlsec/
 │   ├── mlse-opt/
-│   └── mlse-translate/
+│   ├── mlse-translate/
+│   └── mlse-run/
 ├── test/
+│   ├── GoExec/
+│   └── PythonExec/
 ├── examples/
 └── scripts/
 ```
@@ -442,21 +487,26 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 - `docker/`：开发和 CI 的标准运行环境定义。
 - `third_party/`：固定外部编译基础设施依赖，优先用于 `ClangIR/CIR` 集成。
 - `include/mlse/`：对外头文件和核心接口。
+- `include/mlse/Execution/`：共享执行层接口、值模型和 runtime 注册边界。
 - `lib/Frontend/`：各语言前端实现。
 - `lib/Dialect/`：MLSE 自定义 dialect 和类型系统。
 - `lib/Conversion/`：canonicalization、合法化和 lowering。
+- `lib/Execution/`：共享执行内核与输入 importer。
+- `lib/Go/Execution/`、`lib/Python/Execution/`：语言专属 runtime bundle。
 - `lib/Driver/`：命令行入口和 pipeline 编排。
 - `lib/Runtime/`：运行时抽象和 runtime lowering。
 - `tools/`：开发和调试工具。
+- `test/GoExec/`、`test/PythonExec/`：执行差分样例，关注 stdout / stderr 与 panic 行为。
 - `test/`：lit、FileCheck、单元测试和端到端样例。
 
-## 12. 编译驱动与工具规划
+## 13. 编译驱动与工具规划
 
 建议至少提供以下工具：
 
 - `mlsec`：主编译驱动，输入源码并输出 MLIR 或 LLVM IR。
 - `mlse-opt`：调试和执行 MLIR pass pipeline。
 - `mlse-translate`：负责 MLIR 与 LLVM IR 相关翻译或导出。
+- `mlse-run`：执行 MLSE 当前支持的 MLIR / LLVM IR 子集，并输出可观测程序行为。
 
 建议输出接口至少覆盖：
 
@@ -475,34 +525,51 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 - `cir` 表示优先使用 `ClangIR/CIR` 作为前端入口。
 - `clang-compat` 仅在调试或兼容需要时保留。
 
-## 13. 测试策略
+对 `mlse-run` 的执行边界建议明确为：
 
-测试体系建议分四层：
+- 第一阶段首选执行 `--lower-go-bootstrap` 之后的 LLVM-legal MLIR。
+- `02-formal.mlir` 这类更高层输入可以通过现有 lowering 先 normalize，再进入执行层。
+- 只承诺执行 MLSE 当前生成的 LLVM IR 子集，不承诺任意外部 LLVM IR。
 
-### 13.1 Frontend parser/type tests
+## 14. 测试策略
+
+测试体系建议分五层：
+
+### 14.1 Frontend parser/type tests
 
 - 验证不同语言前端对子集语义的解析和类型绑定是否正确。
 
-### 13.2 MLIR golden tests
+### 14.2 MLIR golden tests
 
 - 验证给定输入源码是否生成预期 MLIR。
 
-### 13.3 Lowering tests
+### 14.3 Lowering tests
 
 - 验证 canonical MLIR 是否按预期 lowering 到 `LLVM` dialect 和 `LLVM IR`。
 
-### 13.4 End-to-end tests
+### 14.4 End-to-end tests
 
 - 验证 `source -> MLIR -> LLVM IR` 端到端链路可运行且结果稳定。
 
-### 13.5 Docker 化执行与 CI 基线
+### 14.5 Execution differential tests
+
+- 为 `mlse-run` 增加基于 stdout / stderr 的差分测试层。
+- 同一份源码一边走原生语言执行，一边走 `frontend -> lowering -> mlse-run`。
+- 比较重点应落在可观测行为：
+  - stdout / stderr
+  - panic / trap 文本
+  - 退出状态
+- 不应把不稳定的地址、map 迭代顺序或完整栈轨迹作为主要断言。
+- 建议为 Go 和 Python 各自维护 repo-owned 的执行样例集，并保持同一套差分 harness。
+
+### 14.6 Docker 化执行与 CI 基线
 
 - `build / test / lint` 的官方执行路径应以 Docker 为准。
 - 裸机本地运行可以作为开发加速手段，但不能替代容器基线。
 - CI 应直接调用 `scripts/build.sh`、`scripts/test.sh`、`scripts/lint.sh`，而不是复制一套独立命令。
 - 新增依赖、工具链版本或环境变量时，必须同步更新 Docker 文件和开发文档。
 
-### 13.6 Lint 与格式化策略
+### 14.7 Lint 与格式化策略
 
 MLSE 需要把 lint 和格式化当作持续工程约束，而不是后期补丁。
 
@@ -520,7 +587,7 @@ MLSE 需要把 lint 和格式化当作持续工程约束，而不是后期补丁
 - 格式化工具优先自动修复，lint 工具负责拦截语义和风格问题。
 - PR 合入前，必须至少通过与变更文件类型对应的检查。
 
-### 13.7 定期代码清理与仓库卫生
+### 14.8 定期代码清理与仓库卫生
 
 MLSE 应把代码清理视为常规维护工作，而不是偶发重构。
 
@@ -552,7 +619,7 @@ MLSE 应把代码清理视为常规维护工作，而不是偶发重构。
 - 清理若仅删除死代码，也必须确认没有被脚本、文档或 CI 隐式依赖。
 - 仓库中不应长期保留“未来可能有用”的无主代码。
 
-## 14. 分阶段实施路线
+## 15. 分阶段实施路线
 
 ### M0: 规划与骨架
 
@@ -568,6 +635,7 @@ MLSE 应把代码清理视为常规维护工作，而不是偶发重构。
 - 打通 `MLIR -> LLVM dialect -> LLVM IR`。
 - 建立第一批 lowering 和 golden tests。
 - 接入基础 CI，并让容器内 `test` 与 `lint` 成为默认检查。
+- 为后续 `mlse-run` 预留共享执行层接口，不把语言语义写进 driver 或测试脚本。
 
 ### M2: C/C++ CIR 集成
 
@@ -586,6 +654,7 @@ MLSE 应把代码清理视为常规维护工作，而不是偶发重构。
 
 - 基于 typed AST/SSA 接入 Go 子集。
 - 补充数组、切片、结构体和函数调用的 lowering。
+- 增加 `Go -> lowering -> mlse-run` 的 stdout / stderr 差分样例。
 
 ### M5: C/C++ CIR 归一化
 
@@ -598,7 +667,7 @@ MLSE 应把代码清理视为常规维护工作，而不是偶发重构。
 - 跟随 `ClangIR` upstream 能力扩展可支持范围。
 - 视收益决定是否增强模板、对象模型和 ABI 相关处理中间层。
 
-## 15. 主要风险
+## 16. 主要风险
 
 - `ClangIR` 仍处于 incubator/upstreaming 过程中，版本漂移和 API 变动风险较高。
 - 当前官方状态更偏“C 大体可用，C++ 仍有缺口”，尤其清理、异常和部分 ABI 相关能力仍有限。
@@ -606,21 +675,24 @@ MLSE 应把代码清理视为常规维护工作，而不是偶发重构。
 - Python 动态语义与静态 MLIR 之间存在明显语义鸿沟，必须提前定义受支持子集。
 - 纯 `LLVM` dialect 导入虽然容易打通，但会牺牲高层结构和优化价值。
 - 多语言共用 runtime 抽象时，容易把前端问题推迟到 runtime，导致后期复杂度累积。
+- 如果执行层没有保持“共享内核 + 语言 bundle”分层，Go 和 Python 很容易演化成两套彼此分叉的 runner。
 - LLVM/MLIR 版本升级可能引入 API 和 pass 行为变化，需要早期建立版本固定策略。
 
-## 16. 当前结论
+## 17. 当前结论
 
 基于当前目标，MLSE 的合理推进方式不是同时做四个完整前端，而是：
 
 1. 先把 `MLIR -> LLVM IR` 做成稳定后端。
 2. 直接复用 `ClangIR/CIR` 作为 `C/C++` 前端入口，尽快形成第一个端到端闭环。
 3. 用 `Python` 和 `Go` 的受限子集验证结构化 MLIR 路线。
-4. 再逐步把高价值 `CIR` 子集归一化到跨语言共享表示。
+4. 在 `LLVM-legal MLIR / LLVM IR` 上增加共享执行层，用 stdout / stderr 差分验证 lowering 语义。
+5. 再逐步把高价值 `CIR` 子集归一化到跨语言共享表示。
 
-## 17. 待确认问题
+## 18. 待确认问题
 
 - Python MVP 是否强制要求类型注解。
 - Go MVP 是否完全排除并发语义。
 - C/C++ 的默认交付形态是否明确以 `CIR` 作为一等输出与调试接口。
 - 是否需要在第一阶段支持跨文件和多模块编译。
 - 是否需要尽早定义 runtime ABI 和外部函数调用约定。
+- 执行层第一阶段是否只覆盖 `stdout / stderr / panic / exit status`，还是同时要求稳定的结构化返回值协议。

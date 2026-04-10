@@ -8,8 +8,8 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 
 ## 当前状态
 
-- 状态：初始化中，已落下第一个可运行原型
-- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP，以及第一批正式 `go` dialect C++/TableGen 骨架
+- 状态：初始化中，已落下第一条可运行的前端/执行闭环
+- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP、正式 `go` dialect C++/TableGen 骨架，以及 LLVM-dialect MLIR 的 `mlse-run` MVP
 - 文档：已补充技术规划版 spec、docs 索引、Go 前端说明和正式 GoIR dialect bootstrap 说明
 - 目标：继续收敛到真实 frontend / MLIR 管线，并把当前 formal bridge 扩展成可维护实现
 
@@ -25,7 +25,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 
 - `scripts/build.sh` + `scripts/test.sh`：构建并测试 Go 主线代码
 - `scripts/test-all.sh`：运行仓库当前的统一测试入口，覆盖 Go、linters 和 repo-owned MLIR bridge 样例
-- `scripts/build-mlir.sh`：配置并构建最小 `mlse-opt`，可解析 `test/GoIR/ir/` 下样例
+- `scripts/build-mlir.sh`：配置并构建最小 `mlse-opt` / `mlse-run`
 - `scripts/lint.sh`：运行仓库当前的 Go/C++/Python 规范检查入口
 
 ## Agent 约定
@@ -95,6 +95,7 @@ module {
 更多说明见：
 
 - [docs/go-frontend.md](docs/go-frontend.md)
+- [docs/execution.md](docs/execution.md)
 
 ### 正式 GoIR bootstrap
 
@@ -117,6 +118,7 @@ module {
 更多说明见：
 
 - [docs/goir-dialect.md](docs/goir-dialect.md)
+- [docs/execution.md](docs/execution.md)
 
 ## 协作原则
 
