@@ -13,6 +13,22 @@ func emitFormalHelperCall(spec formalHelperCallSpec, env *formalEnv) (string, st
 	return tmp, emitFormalLinef(nil, env, "    %s = func.call @%s(%s) : (%s) -> %s", tmp, symbol, strings.Join(spec.args, ", "), strings.Join(spec.argTys, ", "), resultTy)
 }
 
+func coerceFormalValueToHint(value string, valueTy string, hintedTy string, env *formalEnv) (string, string, string) {
+	valueTy = normalizeFormalType(valueTy)
+	if hintedTy == "" {
+		return value, valueTy, ""
+	}
+	targetTy := normalizeFormalType(hintedTy)
+	if isFormalOpaquePlaceholderType(targetTy) || valueTy == targetTy {
+		return value, valueTy, ""
+	}
+	if coercedValue, coercedTy, coercedPrelude, ok := emitFormalCoerceValue(value, valueTy, targetTy, env); ok {
+		return coercedValue, normalizeFormalType(coercedTy), coercedPrelude
+	}
+	todoValue, todoTy, todoPrelude := emitFormalTodoValue("type_conversion", targetTy, env)
+	return todoValue, normalizeFormalType(todoTy), todoPrelude
+}
+
 func isFormalOpaquePlaceholderType(ty string) bool {
 	ty = normalizeFormalType(ty)
 	return ty == formalOpaqueType("value") || ty == formalOpaqueType("result")
@@ -95,6 +111,56 @@ func normalizeFormalType(ty string) string {
 
 func normalizeFormalElementType(ty string) string {
 	return normalizeFormalType(ty)
+}
+
+func normalizeFormalBoolConst(ty string, boolConst string) string {
+	if normalizeFormalType(ty) != "i1" {
+		return ""
+	}
+	switch boolConst {
+	case "true", "false":
+		return boolConst
+	default:
+		return ""
+	}
+}
+
+func formalUnparenExpr(expr ast.Expr) ast.Expr {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = paren.X
+	}
+}
+
+func formalKnownBoolExpr(expr ast.Expr, env *formalEnv) (bool, bool) {
+	switch node := formalUnparenExpr(expr).(type) {
+	case *ast.Ident:
+		switch node.Name {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		default:
+			if env == nil {
+				return false, false
+			}
+			return env.boolConstOf(node.Name)
+		}
+	case *ast.UnaryExpr:
+		if node.Op != token.NOT {
+			return false, false
+		}
+		value, ok := formalKnownBoolExpr(node.X, env)
+		if !ok {
+			return false, false
+		}
+		return !value, true
+	default:
+		return false, false
+	}
 }
 
 func isFormalIntegerType(ty string) bool {

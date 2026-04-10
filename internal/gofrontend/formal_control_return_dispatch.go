@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+type formalReturningRegionCandidate struct {
+	stmts         []ast.Stmt
+	usesRemaining bool
+}
+
 func emitFormalTerminatingIfStmt(s *ast.IfStmt, next ast.Stmt, env *formalEnv, resultTypes []string) (string, int, bool, bool) {
 	if s.Init != nil || len(resultTypes) != 1 {
 		return "", 0, false, false
@@ -35,20 +40,23 @@ func emitFormalTerminatingIfStmt(s *ast.IfStmt, next ast.Stmt, env *formalEnv, r
 		return "", 0, false, false
 	}
 
-	cond, prelude, ok := emitFormalCondition(s.Cond, env)
+	condEnv := env.clone()
+	cond, prelude, ok := emitFormalCondition(s.Cond, condEnv)
 	if !ok {
+		syncFormalTempID(env, condEnv)
 		return "", 0, false, false
 	}
 
 	resultTy := resultTypes[0]
-	thenEnv := env.clone()
+	thenEnv := condEnv.clone()
 	thenValue, thenTy, thenPrelude := emitFormalExpr(thenExpr, resultTy, thenEnv)
-	elseEnv := env.clone()
+	elseEnv := condEnv.clone()
 	elseValue, elseTy, elsePrelude := emitFormalExpr(elseExpr, resultTy, elseEnv)
 	if normalizeFormalType(thenTy) != normalizeFormalType(resultTy) || normalizeFormalType(elseTy) != normalizeFormalType(resultTy) {
-		syncFormalTempID(env, thenEnv, elseEnv)
+		syncFormalTempID(env, condEnv, thenEnv, elseEnv)
 		return "", 0, false, false
 	}
+	syncFormalTempID(env, condEnv, thenEnv, elseEnv)
 	result := env.temp("ifret")
 	var buf strings.Builder
 	buf.WriteString(prelude)
@@ -62,7 +70,6 @@ func emitFormalTerminatingIfStmt(s *ast.IfStmt, next ast.Stmt, env *formalEnv, r
 	ifBuf.WriteString("    }\n")
 	buf.WriteString(annotateFormalStructuredOp(ifBuf.String(), s, env))
 	buf.WriteString(emitFormalLinef(s, env, "    return %s : %s", result, resultTy))
-	syncFormalTempID(env, thenEnv, elseEnv)
 	return buf.String(), consumed, true, true
 }
 
@@ -101,7 +108,30 @@ func emitFormalReturningRegion(stmts []ast.Stmt, env *formalEnv, resultTypes []s
 	}
 	prefix, exprs, ok := extractTrailingReturnExprs(stmts)
 	if !ok {
-		return "", nil, nil, false
+		if len(stmts) == 0 {
+			return "", nil, nil, false
+		}
+		prefix := stmts[:len(stmts)-1]
+		body, terminated := emitFormalRegionBlock(prefix, env)
+		if terminated {
+			return "", nil, nil, false
+		}
+		termText, ok := emitFormalTerminatingStmt(stmts[len(stmts)-1], env)
+		if !ok {
+			return "", nil, nil, false
+		}
+		var (
+			values []string
+			types  []string
+			buf    strings.Builder
+		)
+		for _, ty := range resultTypes {
+			value, prelude := emitFormalZeroValue(ty, env)
+			buf.WriteString(prelude)
+			values = append(values, value)
+			types = append(types, ty)
+		}
+		return body + termText + buf.String(), values, types, true
 	}
 	body, terminated := emitFormalRegionBlock(prefix, env)
 	if terminated {
@@ -136,53 +166,88 @@ func emitFormalReturningIfRegion(s *ast.IfStmt, remaining []ast.Stmt, env *forma
 		return initText + body, values, types, consumed, true
 	}
 
-	elseStmts := remaining
-	consumed := len(remaining) + 1
-	if s.Else != nil {
-		elseBlock, ok := s.Else.(*ast.BlockStmt)
+	condEnv := env.clone()
+	cond, prelude, ok := emitFormalCondition(s.Cond, condEnv)
+	if !ok {
+		syncFormalTempID(env, condEnv)
+		return "", nil, nil, 0, false
+	}
+
+	thenCandidates := formalReturningRegionCandidates(s.Body.List, remaining)
+	elseCandidates, ok := formalReturningElseCandidates(s, remaining)
+	if !ok {
+		syncFormalTempID(env, condEnv)
+		return "", nil, nil, 0, false
+	}
+	for _, thenCandidate := range thenCandidates {
+		thenEnv := condEnv.clone()
+		thenBody, thenValues, thenTypes, ok := emitFormalReturningRegion(thenCandidate.stmts, thenEnv, resultTypes)
 		if !ok {
-			return "", nil, nil, 0, false
+			syncFormalTempID(env, condEnv, thenEnv)
+			continue
 		}
-		elseStmts = elseBlock.List
-		consumed = 1
+		for _, elseCandidate := range elseCandidates {
+			elseEnv := condEnv.clone()
+			elseBody, elseValues, elseTypes, ok := emitFormalReturningRegion(elseCandidate.stmts, elseEnv, resultTypes)
+			if !ok {
+				syncFormalTempID(env, condEnv, thenEnv, elseEnv)
+				continue
+			}
+			syncFormalTempID(env, condEnv, thenEnv, elseEnv)
+			result := env.temp("ifret")
+			var buf strings.Builder
+			buf.WriteString(prelude)
+			var ifBuf strings.Builder
+			ifBuf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), cond, strings.Join(resultTypes, ", ")))
+			ifBuf.WriteString(indentBlock(thenBody, 2))
+			ifBuf.WriteString(emitFormalYieldLine(thenValues, thenTypes, env))
+			ifBuf.WriteString("    } else {\n")
+			ifBuf.WriteString(indentBlock(elseBody, 2))
+			ifBuf.WriteString(emitFormalYieldLine(elseValues, elseTypes, env))
+			ifBuf.WriteString("    }\n")
+			buf.WriteString(annotateFormalStructuredOp(ifBuf.String(), s, env))
+			consumed := 1
+			if thenCandidate.usesRemaining || elseCandidate.usesRemaining {
+				consumed = len(remaining) + 1
+			}
+			return buf.String(), formalMultiResultRefs(result, len(resultTypes)), append([]string(nil), resultTypes...), consumed, true
+		}
 	}
-	if len(elseStmts) == 0 {
-		return "", nil, nil, 0, false
-	}
+	syncFormalTempID(env, condEnv)
+	return "", nil, nil, 0, false
+}
 
-	cond, prelude, ok := emitFormalCondition(s.Cond, env)
+func formalReturningRegionCandidates(base []ast.Stmt, remaining []ast.Stmt) []formalReturningRegionCandidate {
+	candidates := []formalReturningRegionCandidate{{
+		stmts: append([]ast.Stmt(nil), base...),
+	}}
+	if len(remaining) != 0 {
+		candidates = append(candidates, formalReturningRegionCandidate{
+			stmts:         append(append([]ast.Stmt(nil), base...), remaining...),
+			usesRemaining: true,
+		})
+	}
+	return candidates
+}
+
+func formalReturningElseCandidates(s *ast.IfStmt, remaining []ast.Stmt) ([]formalReturningRegionCandidate, bool) {
+	if s == nil {
+		return nil, false
+	}
+	if s.Else == nil {
+		if len(remaining) == 0 {
+			return nil, false
+		}
+		return []formalReturningRegionCandidate{{
+			stmts:         append([]ast.Stmt(nil), remaining...),
+			usesRemaining: true,
+		}}, true
+	}
+	elseBlock, ok := s.Else.(*ast.BlockStmt)
 	if !ok {
-		return "", nil, nil, 0, false
+		return nil, false
 	}
-
-	thenEnv := env.clone()
-	thenBody, thenValues, thenTypes, ok := emitFormalReturningRegion(s.Body.List, thenEnv, resultTypes)
-	if !ok {
-		syncFormalTempID(env, thenEnv)
-		return "", nil, nil, 0, false
-	}
-
-	elseEnv := env.clone()
-	elseBody, elseValues, elseTypes, ok := emitFormalReturningRegion(elseStmts, elseEnv, resultTypes)
-	if !ok {
-		syncFormalTempID(env, thenEnv, elseEnv)
-		return "", nil, nil, 0, false
-	}
-
-	result := env.temp("ifret")
-	var buf strings.Builder
-	buf.WriteString(prelude)
-	var ifBuf strings.Builder
-	ifBuf.WriteString(fmt.Sprintf("    %s = scf.if %s -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), cond, strings.Join(resultTypes, ", ")))
-	ifBuf.WriteString(indentBlock(thenBody, 2))
-	ifBuf.WriteString(emitFormalYieldLine(thenValues, thenTypes, env))
-	ifBuf.WriteString("    } else {\n")
-	ifBuf.WriteString(indentBlock(elseBody, 2))
-	ifBuf.WriteString(emitFormalYieldLine(elseValues, elseTypes, env))
-	ifBuf.WriteString("    }\n")
-	buf.WriteString(annotateFormalStructuredOp(ifBuf.String(), s, env))
-	syncFormalTempID(env, thenEnv, elseEnv)
-	return buf.String(), formalMultiResultRefs(result, len(resultTypes)), append([]string(nil), resultTypes...), consumed, true
+	return formalReturningRegionCandidates(elseBlock.List, remaining), true
 }
 
 func emitFormalFallbackReturn(resultTypes []string, env *formalEnv) string {

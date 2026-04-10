@@ -45,7 +45,11 @@ func emitFormalFuncBody(spec formalFuncBodySpec, module *formalModuleContext) st
 	if spec.body == nil {
 		buf.WriteString(emitFormalLinef(spec.scopeNode, env, "    go.todo %q", "missing_body"))
 	} else {
-		bodyText, term := emitFormalFuncBlock(spec.body.List, env, results)
+		normalizedBody := normalizeFormalTopLevelLabelsWithReserved(
+			spec.body.List,
+			collectFormalReservedNames(spec.recv, spec.fnType, spec.body),
+		)
+		bodyText, term := emitFormalFuncBlock(normalizedBody, env, results)
 		buf.WriteString(bodyText)
 		terminated = term
 	}
@@ -99,13 +103,16 @@ func emitFormalStmt(stmt ast.Stmt, env *formalEnv, resultTypes []string) (string
 	case *ast.ReturnStmt:
 		return emitFormalReturnStmt(s, env, resultTypes), true
 	case *ast.ExprStmt:
+		if text, term := emitFormalTerminatingStmt(s, env); term {
+			return text, true
+		}
 		return emitFormalExprStmt(s, env), false
 	case *ast.DeclStmt:
 		return emitFormalDeclStmt(s, env), false
 	case *ast.IfStmt:
 		return emitFormalIfStmt(s, env), false
 	case *ast.ForStmt:
-		return emitFormalForStmt(s, env), false
+		return emitFormalForStmt(s, nil, env), false
 	case *ast.RangeStmt:
 		return emitFormalRangeStmt(s, env), false
 	case *ast.IncDecStmt:

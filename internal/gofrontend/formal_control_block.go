@@ -47,6 +47,11 @@ func emitFormalFuncBlock(stmts []ast.Stmt, env *formalEnv, resultTypes []string)
 			i += consumed - 1
 			continue
 		}
+		if forStmt, ok := stmts[i].(*ast.ForStmt); ok {
+			text := emitFormalForStmt(forStmt, stmts[i+1:], env)
+			buf.WriteString(text)
+			continue
+		}
 		text, term := emitFormalStmt(stmts[i], env, resultTypes)
 		buf.WriteString(text)
 		if term {
@@ -96,6 +101,11 @@ func emitFormalRegionBlock(stmts []ast.Stmt, env *formalEnv) (string, bool) {
 				return buf.String(), true
 			}
 			i += consumed - 1
+			continue
+		}
+		if forStmt, ok := stmts[i].(*ast.ForStmt); ok {
+			text := emitFormalForStmt(forStmt, stmts[i+1:], env)
+			buf.WriteString(text)
 			continue
 		}
 		text, term := emitFormalStmt(stmts[i], env, nil)

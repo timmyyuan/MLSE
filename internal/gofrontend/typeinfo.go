@@ -321,6 +321,36 @@ func formalResolvedGoTypesType(expr ast.Expr, module *formalModuleContext) (type
 	return nil, false
 }
 
+func formalExprUsesUnsignedIntegerSemantics(expr ast.Expr, module *formalModuleContext) bool {
+	ty, ok := formalResolvedGoTypesType(expr, module)
+	if !ok || ty == nil {
+		return false
+	}
+	return formalGoTypesIsUnsignedInteger(ty)
+}
+
+func formalGoTypesIsUnsignedInteger(ty types.Type) bool {
+	for ty != nil {
+		ty = types.Unalias(ty)
+		switch t := ty.(type) {
+		case *types.Basic:
+			switch t.Kind() {
+			case types.Uint, types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uintptr:
+				return true
+			default:
+				return false
+			}
+		case *types.Named:
+			ty = t.Underlying()
+		case *types.Alias:
+			ty = t.Underlying()
+		default:
+			return false
+		}
+	}
+	return false
+}
+
 func formalTypedConstValue(expr ast.Expr, module *formalModuleContext) (goconstant.Value, types.Type, bool) {
 	if expr == nil || module == nil || module.typed == nil || module.typed.info == nil {
 		return nil, nil, false

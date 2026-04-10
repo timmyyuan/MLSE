@@ -3,6 +3,7 @@ package gofrontend
 import (
 	"fmt"
 	"go/ast"
+	goconstant "go/constant"
 	"go/token"
 	"sort"
 	"strings"
@@ -94,12 +95,24 @@ func emitFormalDeclStmt(s *ast.DeclStmt, env *formalEnv) string {
 				}
 				value, valueTy, prelude := emitFormalExpr(valueSpec.Values[i], ty, env)
 				buf.WriteString(prelude)
-				env.bindValue(name.Name, value, valueTy)
+				boolConst := ""
+				if valueBool, ok := formalKnownBoolExpr(valueSpec.Values[i], env); ok {
+					if valueBool {
+						boolConst = "true"
+					} else {
+						boolConst = "false"
+					}
+				}
+				env.bindValueWithBool(name.Name, value, valueTy, boolConst)
 				continue
 			}
 			value, prelude := emitFormalZeroValue(ty, env)
 			buf.WriteString(prelude)
-			env.bindValue(name.Name, value, ty)
+			boolConst := ""
+			if normalizeFormalType(ty) == "i1" {
+				boolConst = "false"
+			}
+			env.bindValueWithBool(name.Name, value, ty, boolConst)
 		}
 	}
 	return buf.String()
@@ -230,114 +243,139 @@ func emitFormalIfStmt(s *ast.IfStmt, env *formalEnv) string {
 	return buf.String()
 }
 
-func emitFormalForStmt(s *ast.ForStmt, env *formalEnv) string {
+func emitFormalForStmt(s *ast.ForStmt, remaining []ast.Stmt, env *formalEnv) string {
+	if text, ok := emitFormalForStmtAttempt(env, func(attemptEnv *formalEnv) (string, bool) {
+		return emitFormalZeroTripForStmt(s, attemptEnv)
+	}); ok {
+		return text
+	}
+	if text, ok := emitFormalForStmtAttempt(env, func(attemptEnv *formalEnv) (string, bool) {
+		return emitFormalCountedForStmt(s, remaining, attemptEnv)
+	}); ok {
+		return text
+	}
+	if text, ok := emitFormalForStmtAttempt(env, func(attemptEnv *formalEnv) (string, bool) {
+		return emitFormalWhileForStmt(s, attemptEnv)
+	}); ok {
+		return text
+	}
+	return emitFormalLinef(s, env, "    go.todo %q", "ForStmt")
+}
+
+func emitFormalForStmtAttempt(env *formalEnv, lower func(*formalEnv) (string, bool)) (string, bool) {
+	if env == nil || lower == nil {
+		return "", false
+	}
+	attemptEnv := env.clone()
+	text, ok := lower(attemptEnv)
+	if !ok {
+		return "", false
+	}
+	propagateFormalOuterBindings(env, attemptEnv)
+	syncFormalTempID(env, attemptEnv)
+	return text, true
+}
+
+func emitFormalCountedForStmt(s *ast.ForStmt, remaining []ast.Stmt, env *formalEnv) (string, bool) {
 	var buf strings.Builder
 	if s.Init != nil {
 		initText, term := emitFormalStmt(s.Init, env, nil)
 		buf.WriteString(initText)
 		if term {
-			return buf.String()
+			return buf.String(), true
 		}
 	}
 
 	if s.Cond == nil {
-		buf.WriteString(emitFormalLinef(s, env, "    go.todo %q", "ForStmt"))
-		return buf.String()
+		return "", false
 	}
 
-	ivName, upperExpr, ok := matchFormalCountedLoopCond(s.Cond)
-	if !ok || len(s.Body.List) == 0 {
-		buf.WriteString(emitFormalLinef(s, env, "    go.todo %q", "ForStmt"))
-		return buf.String()
+	loopSpec, ok := matchFormalCountedLoopCond(s.Cond, env.module)
+	if !ok {
+		return "", false
 	}
 
 	bodyStmts := s.Body.List
+	if formalLoopContainsUnsupportedBranch(bodyStmts) {
+		return "", false
+	}
 	if s.Post != nil {
-		if !isFormalLoopIncrement(s.Post, ivName) {
-			buf.WriteString(emitFormalLinef(s, env, "    go.todo %q", "ForStmt"))
-			return buf.String()
+		step, ok := matchFormalCountedLoopStep(s.Post, loopSpec.ivName, env.module)
+		if !ok || step != loopSpec.step {
+			return "", false
 		}
 	} else {
+		if len(bodyStmts) == 0 {
+			return "", false
+		}
 		last := bodyStmts[len(bodyStmts)-1]
-		if !isFormalLoopIncrement(last, ivName) {
-			buf.WriteString(emitFormalLinef(s, env, "    go.todo %q", "ForStmt"))
-			return buf.String()
+		step, ok := matchFormalCountedLoopStep(last, loopSpec.ivName, env.module)
+		if !ok || step != loopSpec.step {
+			return "", false
 		}
 		bodyStmts = bodyStmts[:len(bodyStmts)-1]
 	}
 
-	ivInit := env.use(ivName)
-	ivTy := env.typeOf(ivName)
+	ivInit := env.use(loopSpec.ivName)
+	ivTy := env.typeOf(loopSpec.ivName)
 	if !isFormalIntegerType(ivTy) {
-		buf.WriteString(emitFormalLinef(s, env, "    go.todo %q", "ForStmt_iv_type"))
-		return buf.String()
+		return "", false
 	}
 
-	upper, upperTy, upperPrelude := emitFormalExpr(upperExpr, ivTy, env)
-	if upperTy != ivTy {
-		buf.WriteString(upperPrelude)
-		buf.WriteString(emitFormalLinef(s, env, "    go.todo %q", "ForStmt_bound_type"))
-		return buf.String()
+	bound, boundTy, boundPrelude := emitFormalExpr(loopSpec.boundExpr, ivTy, env)
+	if boundTy != ivTy {
+		return "", false
+	}
+	loopValues := formalCountedLoopValues{init: ivInit, bound: bound, ty: ivTy}
+
+	lowering, tripPrelude, ok := emitFormalCountedLoopTripCount(s, loopValues, loopSpec, env)
+	if !ok || lowering.initIndex == "" || lowering.tripCount == "" {
+		return "", false
 	}
 
-	carried := collectAssignedOuterNames(bodyStmts, env, ivName)
+	carried := collectAssignedOuterNames(bodyStmts, env, loopSpec.ivName)
 
-	lowerValue := ivInit
-	upperValue := upper
-	loopBoundTy := ivTy
-	if ivTy != "index" {
-		lowerIndex := env.temp("idx")
-		upperIndex := env.temp("idx")
-		upperPrelude += emitFormalLinef(s, env, "    %s = arith.index_cast %s : %s to index", lowerIndex, ivInit, ivTy)
-		upperPrelude += emitFormalLinef(s, env, "    %s = arith.index_cast %s : %s to index", upperIndex, upper, ivTy)
-		lowerValue = lowerIndex
-		upperValue = upperIndex
-		loopBoundTy = "index"
-	}
-	buf.WriteString(upperPrelude)
+	buf.WriteString(boundPrelude)
+	buf.WriteString(tripPrelude)
 
+	lowerValue := env.temp("idx")
 	step := env.temp("const")
-	ivSSA := env.temp(sanitizeName(ivName) + "_iv")
-	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant 1 : %s", step, loopBoundTy))
+	iterSSA := env.temp(sanitizeName(loopSpec.ivName) + "_iter")
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant 0 : index", lowerValue))
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant 1 : index", step))
 
 	if len(carried) == 0 {
 		bodyEnv := env.clone()
-		bodyPrelude := ""
-		if ivTy == "index" {
-			bodyEnv.bindValue(ivName, ivSSA, ivTy)
-		} else {
-			ivCast := bodyEnv.temp(sanitizeName(ivName) + "_body")
-			bodyPrelude = emitFormalLinef(s, env, "    %s = arith.index_cast %s : index to %s", ivCast, ivSSA, ivTy)
-			bodyEnv.bindValue(ivName, ivCast, ivTy)
+		bodyPrelude, ok := emitFormalCountedLoopBodyIV(s, iterSSA, lowering, loopSpec, bodyEnv)
+		if !ok {
+			return "", false
 		}
 		bodyText, _, bodyTerm := emitFormalLoopBody(bodyStmts, bodyEnv, "", "")
 		syncFormalTempID(env, bodyEnv)
 		if bodyTerm {
-			return buf.String() + emitFormalLinef(s, env, "    go.todo %q", "ForStmt_returning_body")
+			return "", false
 		}
 		var forBuf strings.Builder
-		forBuf.WriteString(fmt.Sprintf("    scf.for %s = %s to %s step %s {\n", ivSSA, lowerValue, upperValue, step))
+		forBuf.WriteString(fmt.Sprintf("    scf.for %s = %s to %s step %s {\n", iterSSA, lowerValue, lowering.tripCount, step))
 		forBuf.WriteString(indentBlock(bodyPrelude, 2))
 		forBuf.WriteString(indentBlock(bodyText, 2))
 		forBuf.WriteString("    }\n")
 		buf.WriteString(annotateFormalStructuredOp(forBuf.String(), s, env))
-		exitIV, _, exitPrelude := emitFormalTodoValue("loop_iv_exit", ivTy, env)
-		buf.WriteString(exitPrelude)
-		env.bindValue(ivName, exitIV, ivTy)
-		return buf.String()
+		if formalStmtListUsesIdent(remaining, loopSpec.ivName) {
+			exitIV, exitPrelude := emitFormalCountedLoopExitIV(s, loopValues, loopSpec, env)
+			buf.WriteString(exitPrelude)
+			env.bindValue(loopSpec.ivName, exitIV, ivTy)
+		}
+		return buf.String(), true
 	}
 
 	carriedTys := make([]string, 0, len(carried))
 	iterArgs := make([]string, 0, len(carried))
 	result := env.temp("loop")
 	bodyEnv := env.clone()
-	bodyPrelude := ""
-	if ivTy == "index" {
-		bodyEnv.bindValue(ivName, ivSSA, ivTy)
-	} else {
-		ivCast := bodyEnv.temp(sanitizeName(ivName) + "_body")
-		bodyPrelude = emitFormalLinef(s, env, "    %s = arith.index_cast %s : index to %s", ivCast, ivSSA, ivTy)
-		bodyEnv.bindValue(ivName, ivCast, ivTy)
+	bodyPrelude, ok := emitFormalCountedLoopBodyIV(s, iterSSA, lowering, loopSpec, bodyEnv)
+	if !ok {
+		return "", false
 	}
 	for _, name := range carried {
 		ty := env.typeOf(name)
@@ -349,10 +387,10 @@ func emitFormalForStmt(s *ast.ForStmt, env *formalEnv) string {
 	bodyText, yieldValues, bodyTerm := emitFormalLoopBodyWithCarried(bodyStmts, bodyEnv, carried, carriedTys)
 	syncFormalTempID(env, bodyEnv)
 	if bodyTerm {
-		return buf.String() + emitFormalLinef(s, env, "    go.todo %q", "ForStmt_returning_body")
+		return "", false
 	}
 	var forBuf strings.Builder
-	forBuf.WriteString(fmt.Sprintf("    %s = scf.for %s = %s to %s step %s iter_args(%s) -> (%s) {\n", formalIfResultBinding(result, len(carriedTys)), ivSSA, lowerValue, upperValue, step, strings.Join(iterArgs, ", "), strings.Join(carriedTys, ", ")))
+	forBuf.WriteString(fmt.Sprintf("    %s = scf.for %s = %s to %s step %s iter_args(%s) -> (%s) {\n", formalIfResultBinding(result, len(carriedTys)), iterSSA, lowerValue, lowering.tripCount, step, strings.Join(iterArgs, ", "), strings.Join(carriedTys, ", ")))
 	forBuf.WriteString(indentBlock(bodyPrelude, 2))
 	forBuf.WriteString(indentBlock(bodyText, 2))
 	forBuf.WriteString(emitFormalYieldLine(yieldValues, carriedTys, env))
@@ -362,10 +400,151 @@ func emitFormalForStmt(s *ast.ForStmt, env *formalEnv) string {
 	for i, name := range carried {
 		env.bindValue(name, resultValues[i], carriedTys[i])
 	}
-	exitIV, _, exitPrelude := emitFormalTodoValue("loop_iv_exit", ivTy, env)
-	buf.WriteString(exitPrelude)
-	env.bindValue(ivName, exitIV, ivTy)
-	return buf.String()
+	if formalStmtListUsesIdent(remaining, loopSpec.ivName) {
+		exitIV, exitPrelude := emitFormalCountedLoopExitIV(s, loopValues, loopSpec, env)
+		buf.WriteString(exitPrelude)
+		env.bindValue(loopSpec.ivName, exitIV, ivTy)
+	}
+	return buf.String(), true
+}
+
+func emitFormalWhileForStmt(s *ast.ForStmt, env *formalEnv) (string, bool) {
+	var buf strings.Builder
+	if s.Init != nil {
+		initText, term := emitFormalStmt(s.Init, env, nil)
+		buf.WriteString(initText)
+		if term {
+			return buf.String(), true
+		}
+	}
+	if s.Cond == nil {
+		return "", false
+	}
+
+	carriedScan := append([]ast.Stmt{}, s.Body.List...)
+	if s.Post != nil {
+		carriedScan = append(carriedScan, s.Post)
+	}
+	carried := collectAssignedOuterNamesDeep(carriedScan, env, "")
+	carriedTys := make([]string, 0, len(carried))
+	iterArgs := make([]string, 0, len(carried)+1)
+	condValues := make([]string, 0, len(carried)+1)
+	bodyArgs := make([]string, 0, len(carried)+1)
+	iterSSAs := make([]string, 0, len(carried))
+	bodySSAs := make([]string, 0, len(carried))
+	stopInit := env.temp("loopstop")
+	stopIter := env.temp("loop_stop_iter")
+	stopBody := env.temp("loop_stop_body")
+	buf.WriteString(emitFormalLinef(s, env, "    %s = arith.constant false", stopInit))
+	iterArgs = append(iterArgs, fmt.Sprintf("%s = %s", stopIter, stopInit))
+	condValues = append(condValues, stopIter)
+	bodyArgs = append(bodyArgs, fmt.Sprintf("%s: i1", stopBody))
+	for _, name := range carried {
+		ty := env.typeOf(name)
+		carriedTys = append(carriedTys, ty)
+		iterSSA := env.temp(sanitizeName(name) + "_iter")
+		bodySSA := env.temp(sanitizeName(name) + "_body")
+		iterSSAs = append(iterSSAs, iterSSA)
+		bodySSAs = append(bodySSAs, bodySSA)
+		iterArgs = append(iterArgs, fmt.Sprintf("%s = %s", iterSSA, env.use(name)))
+		condValues = append(condValues, iterSSA)
+		bodyArgs = append(bodyArgs, fmt.Sprintf("%s: %s", bodySSA, ty))
+	}
+	condEnv := env.clone()
+	bodyEnv := env.clone()
+	condEnv.bindValue(stopIter, stopIter, "i1")
+	for i, name := range carried {
+		condEnv.bindValue(name, iterSSAs[i], carriedTys[i])
+		bodyEnv.bindValue(name, bodySSAs[i], carriedTys[i])
+	}
+
+	cond, condPrelude, ok := emitFormalCondition(s.Cond, condEnv)
+	if !ok {
+		return "", false
+	}
+	syncFormalTempID(bodyEnv, condEnv)
+	bodyText, yieldValues, bodyStop, bodyTerm := emitFormalLoopBodyWithBreak(s.Body.List, bodyEnv, carried, carriedTys)
+	if bodyTerm {
+		return "", false
+	}
+	postEnv := env.clone()
+	syncFormalTempID(postEnv, condEnv, bodyEnv)
+	for i, name := range carried {
+		if i < len(yieldValues) {
+			postEnv.bindValue(name, yieldValues[i], carriedTys[i])
+		}
+	}
+	postText := ""
+	postYield := append([]string(nil), yieldValues...)
+	postYieldPrelude := ""
+	if s.Post != nil {
+		postStmtText, term := emitFormalStmt(s.Post, postEnv, nil)
+		if term {
+			return "", false
+		}
+		postText = postStmtText
+		postYield, postYieldPrelude, ok = coerceFormalLoopCarriedValues(postEnv, carried, carriedTys)
+		if !ok {
+			return "", false
+		}
+	}
+	continueFlag := env.temp("loop_continue_flag")
+	continueCond := env.temp("loop_continue")
+	loopCond := env.temp("loop_cond")
+
+	var whileBuf strings.Builder
+	resultTypes := append([]string{"i1"}, carriedTys...)
+	result := env.temp("loop")
+	whileBuf.WriteString(fmt.Sprintf("    %s = scf.while (%s) : (%s) -> (%s) {\n", formalIfResultBinding(result, len(resultTypes)), strings.Join(iterArgs, ", "), strings.Join(resultTypes, ", "), strings.Join(resultTypes, ", ")))
+	whileBuf.WriteString(indentBlock(condPrelude, 1))
+	whileBuf.WriteString(emitFormalLinef(s, env, "      %s = arith.constant true", continueFlag))
+	whileBuf.WriteString(emitFormalLinef(s, env, "      %s = arith.xori %s, %s : i1", continueCond, stopIter, continueFlag))
+	whileBuf.WriteString(emitFormalLinef(s, env, "      %s = arith.andi %s, %s : i1", loopCond, continueCond, cond))
+	whileBuf.WriteString(emitFormalLinef(s, env, "      scf.condition(%s) %s : %s", loopCond, strings.Join(condValues, ", "), strings.Join(resultTypes, ", ")))
+	whileBuf.WriteString("    } do {\n")
+	whileBuf.WriteString(fmt.Sprintf("    ^bb0(%s):\n", strings.Join(bodyArgs, ", ")))
+	whileBuf.WriteString(indentBlock(bodyText, 1))
+	postResult := env.temp("loopstep")
+	whileBuf.WriteString(fmt.Sprintf("      %s = scf.if %s -> (%s) {\n", formalIfResultBinding(postResult, len(resultTypes)), bodyStop, strings.Join(resultTypes, ", ")))
+	whileBuf.WriteString(emitFormalYieldLine(append([]string{bodyStop}, yieldValues...), resultTypes, env))
+	whileBuf.WriteString("      } else {\n")
+	whileBuf.WriteString(indentBlock(postText, 2))
+	whileBuf.WriteString(indentBlock(postYieldPrelude, 2))
+	whileBuf.WriteString(emitFormalLinef(s, env, "        scf.yield %s : %s", strings.Join(append([]string{stopInit}, postYield...), ", "), strings.Join(resultTypes, ", ")))
+	whileBuf.WriteString("      }\n")
+	postRefs := formalMultiResultRefs(postResult, len(resultTypes))
+	whileBuf.WriteString(emitFormalLinef(s, env, "      scf.yield %s : %s", strings.Join(postRefs, ", "), strings.Join(resultTypes, ", ")))
+	whileBuf.WriteString("    }\n")
+	buf.WriteString(annotateFormalStructuredOp(whileBuf.String(), s, env))
+	resultValues := formalMultiResultRefs(result, len(resultTypes))
+	for i, name := range carried {
+		env.bindValue(name, resultValues[i+1], carriedTys[i])
+	}
+	syncFormalTempID(env, condEnv, bodyEnv, postEnv)
+	return buf.String(), true
+}
+
+func coerceFormalLoopCarriedValues(env *formalEnv, carriedNames []string, carriedTys []string) ([]string, string, bool) {
+	if len(carriedNames) != len(carriedTys) {
+		return nil, "", false
+	}
+	values := make([]string, 0, len(carriedNames))
+	var buf strings.Builder
+	for i, name := range carriedNames {
+		value := env.use(name)
+		valueTy := env.typeOf(name)
+		targetTy := carriedTys[i]
+		if normalizeFormalType(valueTy) != normalizeFormalType(targetTy) {
+			coercedValue, coercedTy, coercedPrelude, ok := emitFormalCoerceValue(value, valueTy, targetTy, env)
+			if !ok || normalizeFormalType(coercedTy) != normalizeFormalType(targetTy) {
+				return nil, "", false
+			}
+			buf.WriteString(coercedPrelude)
+			value = coercedValue
+		}
+		values = append(values, value)
+	}
+	return values, buf.String(), true
 }
 
 func emitFormalRangeStmt(s *ast.RangeStmt, env *formalEnv) string {
@@ -526,25 +705,28 @@ func rangeKeyName(expr ast.Expr) string {
 }
 
 func emitFormalIncDecStmt(s *ast.IncDecStmt, env *formalEnv) string {
-	ident, ok := s.X.(*ast.Ident)
-	if !ok {
-		return emitFormalLinef(s, env, "    go.todo %q", shortNodeName(s))
-	}
-	name := env.use(ident.Name)
-	ty := env.typeOf(ident.Name)
+	hint := formalAssignTargetType(s.X, env)
+	currentValue, ty, prelude := emitFormalExpr(s.X, hint, env)
 	if !isFormalIntegerType(ty) {
-		return emitFormalLinef(s, env, "    go.todo %q", "incdec_non_integer")
+		return prelude + emitFormalLinef(s, env, "    go.todo %q", "incdec_non_integer")
 	}
 	step := env.temp("const")
 	next := env.temp("inc")
-	env.assign(ident.Name, ty)
 	op := "arith.addi"
 	if s.Tok == token.DEC {
 		op = "arith.subi"
 	}
-	env.bindValue(ident.Name, next, ty)
-	return emitFormalLinef(s, env, "    %s = arith.constant 1 : %s", step, ty) +
-		emitFormalLinef(s, env, "    %s = %s %s, %s : %s", next, op, name, step, ty)
+	assignText, ok := emitFormalAssignTargetValue(s.X, next, ty, env)
+	if !ok {
+		return prelude +
+			emitFormalLinef(s, env, "    %s = arith.constant 1 : %s", step, ty) +
+			emitFormalLinef(s, env, "    %s = %s %s, %s : %s", next, op, currentValue, step, ty) +
+			emitFormalLinef(s, env, "    go.todo %q", shortNodeName(s))
+	}
+	return prelude +
+		emitFormalLinef(s, env, "    %s = arith.constant 1 : %s", step, ty) +
+		emitFormalLinef(s, env, "    %s = %s %s, %s : %s", next, op, currentValue, step, ty) +
+		assignText
 }
 
 func formalMutatedOuterNames(base *formalEnv, thenEnv *formalEnv, elseEnv *formalEnv, hasElse bool) []string {
@@ -576,6 +758,55 @@ func collectAssignedOuterNames(stmts []ast.Stmt, env *formalEnv, exclude string)
 		excludes[exclude] = struct{}{}
 	}
 	return collectAssignedOuterNamesWithExcludes(stmts, env, excludes)
+}
+
+func collectAssignedOuterNamesDeep(stmts []ast.Stmt, env *formalEnv, exclude string) []string {
+	excludes := make(map[string]struct{})
+	if exclude != "" {
+		excludes[exclude] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	for _, stmt := range stmts {
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case nil:
+				return false
+			case *ast.FuncLit:
+				return false
+			case *ast.AssignStmt:
+				for _, lhs := range node.Lhs {
+					ident, ok := lhs.(*ast.Ident)
+					if !ok || ident.Name == "_" {
+						continue
+					}
+					if _, skip := excludes[ident.Name]; skip {
+						continue
+					}
+					if _, ok := env.locals[ident.Name]; ok {
+						seen[ident.Name] = struct{}{}
+					}
+				}
+			case *ast.IncDecStmt:
+				ident, ok := node.X.(*ast.Ident)
+				if !ok || ident.Name == "_" {
+					return true
+				}
+				if _, skip := excludes[ident.Name]; skip {
+					return true
+				}
+				if _, ok := env.locals[ident.Name]; ok {
+					seen[ident.Name] = struct{}{}
+				}
+			}
+			return true
+		})
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func collectAssignedOuterNamesWithExcludes(stmts []ast.Stmt, env *formalEnv, excludes map[string]struct{}) []string {
@@ -616,42 +847,487 @@ func collectAssignedOuterNamesWithExcludes(stmts []ast.Stmt, env *formalEnv, exc
 	return names
 }
 
-func matchFormalCountedLoopCond(expr ast.Expr) (string, ast.Expr, bool) {
-	binary, ok := expr.(*ast.BinaryExpr)
-	if !ok || binary.Op != token.LSS {
-		return "", nil, false
-	}
-	ident, ok := binary.X.(*ast.Ident)
-	if !ok || ident.Name == "_" {
-		return "", nil, false
-	}
-	return ident.Name, binary.Y, true
+type formalCountedLoopSpec struct {
+	ivName    string
+	boundExpr ast.Expr
+	step      int
+	inclusive bool
+	unsigned  bool
 }
 
-func isFormalLoopIncrement(stmt ast.Stmt, ivName string) bool {
-	switch s := stmt.(type) {
-	case *ast.IncDecStmt:
-		ident, ok := s.X.(*ast.Ident)
-		return ok && ident.Name == ivName && s.Tok == token.INC
-	case *ast.AssignStmt:
-		if len(s.Lhs) != 1 || len(s.Rhs) != 1 || s.Tok != token.ASSIGN {
-			return false
+type formalCountedLoopValues struct {
+	init  string
+	bound string
+	ty    string
+}
+
+type formalCountedLoopLowering struct {
+	values    formalCountedLoopValues
+	initIndex string
+	tripCount string
+}
+
+type formalForFirstIterationStatus int
+
+const (
+	formalForFirstIterationUnknown formalForFirstIterationStatus = iota
+	formalForFirstIterationNever
+	formalForFirstIterationAlways
+)
+
+func emitFormalZeroTripForStmt(s *ast.ForStmt, env *formalEnv) (string, bool) {
+	if formalClassifyForFirstIteration(s, env.module) != formalForFirstIterationNever {
+		return "", false
+	}
+	if s == nil {
+		return "", false
+	}
+	if s.Init == nil {
+		return "", false
+	}
+	text, term := emitFormalStmt(s.Init, env, nil)
+	if term {
+		return text, true
+	}
+	return text, true
+}
+
+func formalClassifyForFirstIteration(s *ast.ForStmt, module *formalModuleContext) formalForFirstIterationStatus {
+	if s == nil || s.Cond == nil {
+		return formalForFirstIterationUnknown
+	}
+
+	initExpr, ivExpr, ok := formalSimpleForInitExpr(s.Init)
+	if !ok {
+		return formalForFirstIterationUnknown
+	}
+
+	binary, ok := formalUnparenExpr(s.Cond).(*ast.BinaryExpr)
+	if !ok {
+		return formalForFirstIterationUnknown
+	}
+
+	ivComparable := formalCountedLoopComparableExpr(ivExpr, module)
+	condX := formalCountedLoopComparableExpr(binary.X, module)
+	condY := formalCountedLoopComparableExpr(binary.Y, module)
+	compareOp := binary.Op
+	boundExpr := condY
+	switch {
+	case formalExprStructuralEqual(condX, ivComparable):
+	case formalExprStructuralEqual(condY, ivComparable):
+		compareOp, ok = formalReverseComparisonOp(binary.Op)
+		if !ok {
+			return formalForFirstIterationUnknown
 		}
-		lhs, ok := s.Lhs[0].(*ast.Ident)
-		if !ok || lhs.Name != ivName {
-			return false
+		boundExpr = condX
+	default:
+		return formalForFirstIterationUnknown
+	}
+
+	initValue, _, ok := formalTypedConstValue(formalCountedLoopComparableExpr(initExpr, module), module)
+	if !ok || initValue == nil {
+		return formalForFirstIterationUnknown
+	}
+	boundValue, _, ok := formalTypedConstValue(formalCountedLoopComparableExpr(boundExpr, module), module)
+	if !ok || boundValue == nil {
+		return formalForFirstIterationUnknown
+	}
+
+	unsigned := formalExprUsesUnsignedIntegerSemantics(ivComparable, module) || formalExprUsesUnsignedIntegerSemantics(boundExpr, module)
+	result, ok := formalCompareIntegerConsts(compareOp, initValue, boundValue, unsigned)
+	if !ok {
+		return formalForFirstIterationUnknown
+	}
+	if result {
+		return formalForFirstIterationAlways
+	}
+	return formalForFirstIterationNever
+}
+
+func formalSimpleForInitExpr(stmt ast.Stmt) (ast.Expr, ast.Expr, bool) {
+	assign, ok := stmt.(*ast.AssignStmt)
+	if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+		return nil, nil, false
+	}
+	switch assign.Tok {
+	case token.ASSIGN, token.DEFINE:
+		if ident, ok := formalUnparenExpr(assign.Lhs[0]).(*ast.Ident); ok && ident.Name == "_" {
+			return nil, nil, false
 		}
-		binary, ok := s.Rhs[0].(*ast.BinaryExpr)
-		if !ok || binary.Op != token.ADD {
-			return false
-		}
-		x, ok := binary.X.(*ast.Ident)
-		if !ok || x.Name != ivName {
-			return false
-		}
-		lit, ok := binary.Y.(*ast.BasicLit)
-		return ok && lit.Kind == token.INT && lit.Value == "1"
+		return assign.Rhs[0], assign.Lhs[0], true
+	default:
+		return nil, nil, false
+	}
+}
+
+func formalReverseComparisonOp(op token.Token) (token.Token, bool) {
+	switch op {
+	case token.LSS:
+		return token.GTR, true
+	case token.LEQ:
+		return token.GEQ, true
+	case token.GTR:
+		return token.LSS, true
+	case token.GEQ:
+		return token.LEQ, true
+	case token.EQL, token.NEQ:
+		return op, true
+	default:
+		return token.ILLEGAL, false
+	}
+}
+
+func formalExprStructuralEqual(lhs ast.Expr, rhs ast.Expr) bool {
+	lhs = formalUnparenExpr(lhs)
+	rhs = formalUnparenExpr(rhs)
+	switch l := lhs.(type) {
+	case *ast.Ident:
+		r, ok := rhs.(*ast.Ident)
+		return ok && l.Name == r.Name
+	case *ast.BasicLit:
+		r, ok := rhs.(*ast.BasicLit)
+		return ok && l.Kind == r.Kind && l.Value == r.Value
+	case *ast.SelectorExpr:
+		r, ok := rhs.(*ast.SelectorExpr)
+		return ok && formalExprStructuralEqual(l.X, r.X) && l.Sel != nil && r.Sel != nil && l.Sel.Name == r.Sel.Name
+	case *ast.IndexExpr:
+		r, ok := rhs.(*ast.IndexExpr)
+		return ok && formalExprStructuralEqual(l.X, r.X) && formalExprStructuralEqual(l.Index, r.Index)
+	case *ast.StarExpr:
+		r, ok := rhs.(*ast.StarExpr)
+		return ok && formalExprStructuralEqual(l.X, r.X)
 	default:
 		return false
 	}
+}
+
+func formalCompareIntegerConsts(op token.Token, lhs goconstant.Value, rhs goconstant.Value, unsigned bool) (bool, bool) {
+	lhs = goconstant.ToInt(lhs)
+	rhs = goconstant.ToInt(rhs)
+	if lhs == nil || rhs == nil {
+		return false, false
+	}
+	if unsigned {
+		lhsU, ok := goconstant.Uint64Val(lhs)
+		if !ok {
+			return false, false
+		}
+		rhsU, ok := goconstant.Uint64Val(rhs)
+		if !ok {
+			return false, false
+		}
+		switch op {
+		case token.LSS:
+			return lhsU < rhsU, true
+		case token.LEQ:
+			return lhsU <= rhsU, true
+		case token.GTR:
+			return lhsU > rhsU, true
+		case token.GEQ:
+			return lhsU >= rhsU, true
+		case token.EQL:
+			return lhsU == rhsU, true
+		case token.NEQ:
+			return lhsU != rhsU, true
+		default:
+			return false, false
+		}
+	}
+	lhsI, ok := goconstant.Int64Val(lhs)
+	if !ok {
+		return false, false
+	}
+	rhsI, ok := goconstant.Int64Val(rhs)
+	if !ok {
+		return false, false
+	}
+	switch op {
+	case token.LSS:
+		return lhsI < rhsI, true
+	case token.LEQ:
+		return lhsI <= rhsI, true
+	case token.GTR:
+		return lhsI > rhsI, true
+	case token.GEQ:
+		return lhsI >= rhsI, true
+	case token.EQL:
+		return lhsI == rhsI, true
+	case token.NEQ:
+		return lhsI != rhsI, true
+	default:
+		return false, false
+	}
+}
+
+func matchFormalCountedLoopCond(expr ast.Expr, module *formalModuleContext) (formalCountedLoopSpec, bool) {
+	binary, ok := expr.(*ast.BinaryExpr)
+	if !ok {
+		return formalCountedLoopSpec{}, false
+	}
+	ident, ok := formalCountedLoopCondIdent(binary.X, module)
+	if !ok || ident.Name == "_" {
+		return formalCountedLoopSpec{}, false
+	}
+	spec := formalCountedLoopSpec{
+		ivName:    ident.Name,
+		boundExpr: formalCountedLoopComparableExpr(binary.Y, module),
+		unsigned:  formalExprUsesUnsignedIntegerSemantics(binary.X, module) || formalExprUsesUnsignedIntegerSemantics(binary.Y, module),
+	}
+	switch binary.Op {
+	case token.LSS:
+		spec.step = +1
+	case token.LEQ:
+		spec.step = +1
+		spec.inclusive = true
+	case token.GTR:
+		spec.step = -1
+	case token.GEQ:
+		spec.step = -1
+		spec.inclusive = true
+	default:
+		return formalCountedLoopSpec{}, false
+	}
+	return spec, true
+}
+
+func formalLoopContainsUnsupportedCurrentBranch(stmts []ast.Stmt, allowBreak bool) bool {
+	for _, stmt := range stmts {
+		found := false
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case nil:
+				return false
+			case *ast.FuncLit:
+				return false
+			case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+				if n == stmt {
+					return true
+				}
+				return false
+			case *ast.BranchStmt:
+				if node.Label != nil || (node.Tok == token.BREAK && !allowBreak) {
+					found = true
+					return false
+				}
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func formalLoopContainsUnsupportedBranch(stmts []ast.Stmt) bool {
+	return formalLoopContainsUnsupportedCurrentBranch(stmts, false)
+}
+
+func emitFormalCountedLoopExitIV(node ast.Node, values formalCountedLoopValues, spec formalCountedLoopSpec, env *formalEnv) (string, string) {
+	cmp := env.temp("loop_exit_cmp")
+	exit := env.temp("loop_exit")
+	adjusted := values.bound
+	pred := "slt"
+	if spec.unsigned {
+		pred = "ult"
+	}
+	var buf strings.Builder
+	if spec.step > 0 && spec.inclusive {
+		adjusted = env.temp("loop_exit_bound")
+		pred = strings.Replace(pred, "lt", "le", 1)
+		one := env.temp("const")
+		buf.WriteString(emitFormalLinef(node, env, "    %s = arith.constant 1 : %s", one, values.ty))
+		buf.WriteString(emitFormalLinef(node, env, "    %s = arith.addi %s, %s : %s", adjusted, values.bound, one, values.ty))
+	} else if spec.step < 0 && spec.inclusive {
+		adjusted = env.temp("loop_exit_bound")
+		if spec.unsigned {
+			pred = "uge"
+		} else {
+			pred = "sge"
+		}
+		one := env.temp("const")
+		buf.WriteString(emitFormalLinef(node, env, "    %s = arith.constant 1 : %s", one, values.ty))
+		buf.WriteString(emitFormalLinef(node, env, "    %s = arith.subi %s, %s : %s", adjusted, values.bound, one, values.ty))
+	} else if spec.step < 0 {
+		if spec.unsigned {
+			pred = "ugt"
+		} else {
+			pred = "sgt"
+		}
+	} else if spec.unsigned {
+		pred = "ult"
+	} else {
+		pred = "slt"
+	}
+	if spec.step > 0 && !spec.inclusive {
+		if spec.unsigned {
+			pred = "ult"
+		} else {
+			pred = "slt"
+		}
+	}
+	buf.WriteString(emitFormalLinef(node, env, "    %s = arith.cmpi %s, %s, %s : %s", cmp, pred, values.init, values.bound, values.ty))
+	buf.WriteString(emitFormalLinef(node, env, "    %s = arith.select %s, %s, %s : %s", exit, cmp, adjusted, values.init, values.ty))
+	return exit, buf.String()
+}
+
+func matchFormalCountedLoopStep(stmt ast.Stmt, ivName string, module *formalModuleContext) (int, bool) {
+	switch s := stmt.(type) {
+	case *ast.IncDecStmt:
+		ident, ok := s.X.(*ast.Ident)
+		if !ok || ident.Name != ivName {
+			return 0, false
+		}
+		switch s.Tok {
+		case token.INC:
+			return +1, true
+		case token.DEC:
+			return -1, true
+		default:
+			return 0, false
+		}
+	case *ast.AssignStmt:
+		if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
+			return 0, false
+		}
+		lhs, ok := s.Lhs[0].(*ast.Ident)
+		if !ok || lhs.Name != ivName {
+			return 0, false
+		}
+		switch s.Tok {
+		case token.ADD_ASSIGN:
+			if formalExprIsIntConstantOne(s.Rhs[0], module) {
+				return +1, true
+			}
+			return 0, false
+		case token.SUB_ASSIGN:
+			if formalExprIsIntConstantOne(s.Rhs[0], module) {
+				return -1, true
+			}
+			return 0, false
+		case token.ASSIGN:
+		default:
+			return 0, false
+		}
+		binary, ok := s.Rhs[0].(*ast.BinaryExpr)
+		if !ok {
+			return 0, false
+		}
+		x, ok := binary.X.(*ast.Ident)
+		if !ok || x.Name != ivName {
+			if binary.Op == token.ADD {
+				y, yok := binary.Y.(*ast.Ident)
+				if yok && y.Name == ivName && formalExprIsIntConstantOne(binary.X, module) {
+					return +1, true
+				}
+			}
+			return 0, false
+		}
+		if !formalExprIsIntConstantOne(binary.Y, module) {
+			return 0, false
+		}
+		switch binary.Op {
+		case token.ADD:
+			return +1, true
+		case token.SUB:
+			return -1, true
+		default:
+			return 0, false
+		}
+	default:
+		return 0, false
+	}
+}
+
+func formalExprIsIntConstantOne(expr ast.Expr, module *formalModuleContext) bool {
+	if lit, ok := formalUnparenExpr(expr).(*ast.BasicLit); ok && lit.Kind == token.INT && lit.Value == "1" {
+		return true
+	}
+	val, _, ok := formalTypedConstValue(expr, module)
+	return ok && val != nil && val.String() == "1"
+}
+
+func formalCountedLoopCondIdent(expr ast.Expr, module *formalModuleContext) (*ast.Ident, bool) {
+	if ident, ok := formalCountedLoopIdent(formalCountedLoopComparableExpr(expr, module)); ok {
+		return ident, true
+	}
+	return nil, false
+}
+
+func formalCountedLoopComparableExpr(expr ast.Expr, module *formalModuleContext) ast.Expr {
+	expr = formalUnparenExpr(expr)
+	call, ok := formalUnparenExpr(expr).(*ast.CallExpr)
+	if !ok || !isFormalTypeConversionCall(call, module) {
+		return expr
+	}
+	convertedTy, ok := formalTypedExprType(call, module)
+	if !ok || !isFormalIntegerType(convertedTy) {
+		return expr
+	}
+	argTy, ok := formalTypedExprType(call.Args[0], module)
+	if !ok || !isFormalIntegerType(argTy) {
+		return expr
+	}
+	return formalCountedLoopComparableExpr(call.Args[0], module)
+}
+
+func formalCountedLoopIdent(expr ast.Expr) (*ast.Ident, bool) {
+	ident, ok := formalUnparenExpr(expr).(*ast.Ident)
+	if !ok || ident.Name == "_" {
+		return nil, false
+	}
+	return ident, true
+}
+
+func emitFormalCountedLoopTripCount(node ast.Node, values formalCountedLoopValues, spec formalCountedLoopSpec, env *formalEnv) (formalCountedLoopLowering, string, bool) {
+	initIndex := values.init
+	boundIndex := values.bound
+	var buf strings.Builder
+	if values.ty != "index" {
+		initIndex = env.temp("idx")
+		boundIndex = env.temp("idx")
+		buf.WriteString(emitFormalLinef(node, env, "    %s = arith.index_cast %s : %s to index", initIndex, values.init, values.ty))
+		buf.WriteString(emitFormalLinef(node, env, "    %s = arith.index_cast %s : %s to index", boundIndex, values.bound, values.ty))
+	}
+	diff := env.temp("trip")
+	if spec.step > 0 {
+		buf.WriteString(emitFormalLinef(node, env, "    %s = arith.subi %s, %s : index", diff, boundIndex, initIndex))
+	} else {
+		buf.WriteString(emitFormalLinef(node, env, "    %s = arith.subi %s, %s : index", diff, initIndex, boundIndex))
+	}
+	lowering := formalCountedLoopLowering{
+		values:    values,
+		initIndex: initIndex,
+		tripCount: diff,
+	}
+	if !spec.inclusive {
+		return lowering, buf.String(), true
+	}
+	one := env.temp("const")
+	trip := env.temp("trip")
+	buf.WriteString(emitFormalLinef(node, env, "    %s = arith.constant 1 : index", one))
+	buf.WriteString(emitFormalLinef(node, env, "    %s = arith.addi %s, %s : index", trip, diff, one))
+	lowering.tripCount = trip
+	return lowering, buf.String(), true
+}
+
+func emitFormalCountedLoopBodyIV(node ast.Node, iter string, lowering formalCountedLoopLowering, spec formalCountedLoopSpec, env *formalEnv) (string, bool) {
+	actualIndex := iter
+	var buf strings.Builder
+	if lowering.initIndex != iter {
+		actualIndex = env.temp(sanitizeName(spec.ivName) + "_idx")
+		op := "arith.addi"
+		if spec.step < 0 {
+			op = "arith.subi"
+		}
+		buf.WriteString(emitFormalLinef(node, env, "    %s = %s %s, %s : index", actualIndex, op, lowering.initIndex, iter))
+	}
+	if lowering.values.ty == "index" {
+		env.bindValue(spec.ivName, actualIndex, lowering.values.ty)
+		return buf.String(), true
+	}
+	ivCast := env.temp(sanitizeName(spec.ivName) + "_body")
+	buf.WriteString(emitFormalLinef(node, env, "    %s = arith.index_cast %s : index to %s", ivCast, actualIndex, lowering.values.ty))
+	env.bindValue(spec.ivName, ivCast, lowering.values.ty)
+	return buf.String(), true
 }

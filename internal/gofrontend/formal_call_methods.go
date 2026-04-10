@@ -14,7 +14,7 @@ func emitFormalMethodCallExpr(call *ast.CallExpr, hintedTy string, env *formalEn
 
 	recv, recvTy, recvPrelude := emitFormalExpr(selector.X, "", env)
 	args, argTys, argPrelude := emitFormalCallOperandsWithHints(call.Args, argHints, env)
-	resultTy := inferFormalCallResultType(call, hintedTy, env)
+	resultTy := formalCallActualResultType(call, env)
 	symbol := formalMethodSymbol(selector, append([]string{recvTy}, argTys...), []string{resultTy}, env.module)
 	tmp := env.temp("call")
 	var buf strings.Builder
@@ -30,7 +30,9 @@ func emitFormalMethodCallExpr(call *ast.CallExpr, hintedTy string, env *formalEn
 		strings.Join(append([]string{recvTy}, argTys...), ", "),
 		resultTy,
 	))
-	return tmp, resultTy, buf.String(), true
+	coercedValue, coercedTy, coercedPrelude := coerceFormalValueToHint(tmp, resultTy, hintedTy, env)
+	buf.WriteString(coercedPrelude)
+	return coercedValue, coercedTy, buf.String(), true
 }
 
 // emitFormalMethodCallStmt lowers statement-position method calls to the current `package.method` symbol convention.
@@ -42,18 +44,46 @@ func emitFormalMethodCallStmt(call *ast.CallExpr, env *formalEnv, argHints []str
 
 	recv, recvTy, recvPrelude := emitFormalExpr(selector.X, "", env)
 	args, argTys, argPrelude := emitFormalCallOperandsWithHints(call.Args, argHints, env)
-	symbol := formalMethodSymbol(selector, append([]string{recvTy}, argTys...), nil, env.module)
+	resultTys := []string(nil)
+	if sig, ok := formalExprFuncSig(call.Fun, env); ok {
+		resultTys = append([]string(nil), sig.results...)
+	}
+	symbol := formalMethodSymbol(selector, append([]string{recvTy}, argTys...), resultTys, env.module)
 	var buf strings.Builder
 	buf.WriteString(recvPrelude)
 	buf.WriteString(argPrelude)
-	buf.WriteString(emitFormalLinef(
-		call,
-		env,
-		"    func.call @%s(%s) : (%s) -> ()",
-		symbol,
-		strings.Join(append([]string{recv}, args...), ", "),
-		strings.Join(append([]string{recvTy}, argTys...), ", "),
-	))
+	switch len(resultTys) {
+	case 0:
+		buf.WriteString(emitFormalLinef(
+			call,
+			env,
+			"    func.call @%s(%s) : (%s) -> ()",
+			symbol,
+			strings.Join(append([]string{recv}, args...), ", "),
+			strings.Join(append([]string{recvTy}, argTys...), ", "),
+		))
+	case 1:
+		tmp := env.temp("call")
+		buf.WriteString(emitFormalLinef(
+			call,
+			env,
+			"    %s = func.call @%s(%s) : (%s) -> %s",
+			tmp,
+			symbol,
+			strings.Join(append([]string{recv}, args...), ", "),
+			strings.Join(append([]string{recvTy}, argTys...), ", "),
+			resultTys[0],
+		))
+	default:
+		base := env.temp("call")
+		buf.WriteString(formatFormalMultiResultCall(formalMultiResultCallSpec{
+			base:      base,
+			callee:    symbol,
+			args:      append([]string{recv}, args...),
+			argTys:    append([]string{recvTy}, argTys...),
+			resultTys: resultTys,
+		}))
+	}
 	return buf.String(), true
 }
 

@@ -183,6 +183,36 @@ FailureOr<int64_t> getStaticTypeSizeInBytes(Type type, ModuleOp module) {
   return static_cast<int64_t>(size.getFixedValue());
 }
 
+class ExecuteRegionInlineLowering
+    : public OpConversionPattern<scf::ExecuteRegionOp> {
+public:
+  using OpConversionPattern<scf::ExecuteRegionOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(scf::ExecuteRegionOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    (void)adaptor;
+
+    if (!op.getRegion().hasOneBlock())
+      return failure();
+    Block &body = op.getRegion().front();
+    if (body.getNumArguments() != 0)
+      return failure();
+
+    auto yield = dyn_cast<scf::YieldOp>(body.getTerminator());
+    if (!yield || yield.getNumOperands() != op.getNumResults())
+      return failure();
+
+    SmallVector<Value> yielded(yield.getOperands().begin(),
+                               yield.getOperands().end());
+    for (Operation &nested : llvm::make_early_inc_range(body.without_terminator()))
+      rewriter.moveOpBefore(&nested, op);
+
+    rewriter.replaceOp(op, yielded);
+    return success();
+  }
+};
+
 LLVM::GlobalOp getOrCreateStringGlobal(ModuleOp module, StringRef value) {
   MLIRContext *context = module.getContext();
   auto i8Ty = IntegerType::get(context, 8);
@@ -1102,15 +1132,21 @@ LogicalResult lowerGoBootstrap(ModuleOp module) {
   scf::populateSCFStructuralTypeConversionsAndLegality(typeConverter, patterns,
                                                        target);
 
-  patterns.add<GoStringConstantOpLowering, GoNilOpLowering, GoMakeSliceOpLowering,
-               GoLenOpLowering, GoCapOpLowering, GoCompareOpLowering<go_dialect::EqOp>,
+  patterns.add<ExecuteRegionInlineLowering, GoStringConstantOpLowering,
+               GoNilOpLowering, GoMakeSliceOpLowering, GoLenOpLowering,
+               GoCapOpLowering, GoCompareOpLowering<go_dialect::EqOp>,
                GoCompareOpLowering<go_dialect::NeqOp>, GoIndexOpLowering,
                GoElemAddrOpLowering, GoAppendOpLowering,
-               GoAppendSliceOpLowering, GoFieldAddrOpLowering, GoLoadOpLowering,
-               GoStoreOpLowering, FuncConstantOpLowering,
+               GoAppendSliceOpLowering, GoFieldAddrOpLowering,
+               GoLoadOpLowering, GoStoreOpLowering, FuncConstantOpLowering,
                FuncCallIndirectOpLowering>(typeConverter, context);
 
   target.addLegalOp<ModuleOp>();
+  target.addDynamicallyLegalOp<scf::ExecuteRegionOp>(
+      [&](scf::ExecuteRegionOp op) {
+        return typeConverter.isLegal(op.getResultTypes()) &&
+               typeConverter.isLegal(&op.getRegion());
+      });
   target.addIllegalDialect<go_dialect::GoDialect>();
   target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
     return typeConverter.isSignatureLegal(op.getFunctionType()) &&

@@ -5,6 +5,8 @@ import argparse
 import collections
 import concurrent.futures
 from dataclasses import dataclass
+import fcntl
+import hashlib
 import json
 import os
 import re
@@ -13,6 +15,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DATASET_ROOT = "../gobench-eq/dataset/cases"
+DEFAULT_ARTIFACT_DIR = "artifacts/go-gobench-mlir-suite"
+DEFAULT_TMP_DIR = "tmp/go-gobench-mlir-suite"
 
 
 LOWERING_PASSES = [
@@ -61,7 +68,6 @@ class SSADumpSpec:
 
 
 def parse_args() -> argparse.Namespace:
-    root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(
         description=(
             "Probe gobench-eq Go files through the current MLSE Go frontend, "
@@ -69,14 +75,9 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument(
-        "--root",
-        default=str(root),
-        help="MLSE repository root",
-    )
-    parser.add_argument(
         "--dataset-root",
-        default="../gobench-eq/dataset/cases",
-        help="Path to gobench-eq dataset/cases relative to --root unless absolute",
+        default=DEFAULT_DATASET_ROOT,
+        help="Path to gobench-eq dataset/cases relative to the repo root unless absolute",
     )
     parser.add_argument(
         "--case-glob",
@@ -86,13 +87,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--artifact-dir",
-        default="artifacts/go-gobench-mlir-suite",
-        help="Artifact directory relative to --root unless absolute",
-    )
-    parser.add_argument(
-        "--tmp-dir",
-        default="tmp/go-gobench-mlir-suite",
-        help="Scratch directory relative to --root unless absolute",
+        default=DEFAULT_ARTIFACT_DIR,
+        help="Artifact directory relative to the repo root unless absolute",
     )
     parser.add_argument(
         "--jobs",
@@ -112,20 +108,7 @@ def parse_args() -> argparse.Namespace:
         help="Skip rebuilding mlse-go and mlse-opt before probing",
     )
     parser.add_argument("--mlse-go-bin", default="", help="Override mlse-go binary path")
-    parser.add_argument(
-        "--mlse-go-ssa-dump-bin",
-        default="",
-        help="Override mlse-go-ssa-dump binary path",
-    )
     parser.add_argument("--mlse-opt-bin", default="", help="Override mlse-opt binary path")
-    parser.add_argument("--mlir-opt-bin", default="", help="Override upstream mlir-opt path")
-    parser.add_argument(
-        "--mlir-translate-bin",
-        default="",
-        help="Override upstream mlir-translate path",
-    )
-    parser.add_argument("--opt-bin", default="", help="Override LLVM opt path")
-    parser.add_argument("--llvm-as-bin", default="", help="Override llvm-as path")
     return parser.parse_args()
 
 
@@ -164,6 +147,57 @@ def discover_tool(configured: str, logical_name: str) -> str | None:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
+
+
+def sanitize_path_component(text: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", text.strip())
+    return sanitized.strip("._") or "default"
+
+
+def derive_tmp_dir(root: Path, artifact_dir: Path) -> Path:
+    rel_artifact_dir = rel_to_root(artifact_dir, root)
+    digest = hashlib.sha256(rel_artifact_dir.encode("utf-8")).hexdigest()[:12]
+    stem = sanitize_path_component(Path(rel_artifact_dir).name)
+    return (root / DEFAULT_TMP_DIR / f"{stem}-{digest}").resolve()
+
+
+def lock_path_for_artifact_dir(artifact_dir: Path) -> Path:
+    return artifact_dir.parent / f".{artifact_dir.name}.lock"
+
+
+def acquire_lock(lock_path: Path, artifact_dir: Path) -> int | None:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+
+    payload = {
+        "pid": os.getpid(),
+        "artifact_dir": str(artifact_dir),
+        "created_at_unix": int(time.time()),
+    }
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+    os.fsync(fd)
+    return fd
+
+
+def release_lock(lock_path: Path, fd: int | None) -> None:
+    if fd is None:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    os.close(fd)
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def ensure_dirs(*paths: Path) -> None:
@@ -740,127 +774,141 @@ def main() -> int:
     args = parse_args()
     if not args.case_glob:
         args.case_glob = ["goeq-spec-*"]
-    root = resolve_path(Path.cwd(), args.root)
+    root = REPO_ROOT
     dataset_root = resolve_path(root, args.dataset_root)
     artifact_dir = resolve_path(root, args.artifact_dir)
-    tmp_dir = resolve_path(root, args.tmp_dir)
+    tmp_dir = derive_tmp_dir(root, artifact_dir)
+    lock_path = lock_path_for_artifact_dir(artifact_dir)
 
     if not dataset_root.is_dir():
         print(f"error: dataset root not found: {dataset_root}", file=sys.stderr)
         return 2
 
-    if artifact_dir.exists():
-        shutil.rmtree(artifact_dir)
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir)
-
-    env = os.environ.copy()
-    env["GOCACHE"] = str(tmp_dir / "go-build")
-    env["GOMODCACHE"] = str(tmp_dir / "gomodcache")
-    env["HOME"] = str(tmp_dir / "home")
-    ensure_dirs(
-        artifact_dir,
-        tmp_dir,
-        Path(env["GOCACHE"]),
-        Path(env["GOMODCACHE"]),
-        Path(env["HOME"]),
-    )
-
-    if not args.skip_build:
-        print("building mlse-go and mlse-opt...", file=sys.stderr)
-        build_tools(root, env)
-
-    mlse_go_bin = discover_tool(args.mlse_go_bin, "mlse-go") or str(root / "artifacts" / "bin" / "mlse-go")
-    mlse_go_ssa_dump_bin = discover_tool(args.mlse_go_ssa_dump_bin, "mlse-go-ssa-dump") or str(
-        root / "artifacts" / "bin" / "mlse-go-ssa-dump"
-    )
-    mlse_opt_bin = discover_tool(args.mlse_opt_bin, "mlse-opt") or str(root / "tmp" / "cmake-mlir-build" / "tools" / "mlse-opt" / "mlse-opt")
-    mlir_opt_bin = discover_tool(args.mlir_opt_bin, "mlir-opt")
-    mlir_translate_bin = discover_tool(args.mlir_translate_bin, "mlir-translate")
-    opt_bin = discover_tool(args.opt_bin, "opt")
-    llvm_as_bin = discover_tool(args.llvm_as_bin, "llvm-as")
-
-    for required in (mlse_go_bin, mlse_opt_bin):
-        if not required or not Path(required).is_file():
-            print(f"error: required binary not found: {required}", file=sys.stderr)
-            return 2
-
-    sources = collect_sources(dataset_root, args.case_glob, args.limit)
-    if not sources:
-        print("error: no source files matched", file=sys.stderr)
+    lock_fd = acquire_lock(lock_path, artifact_dir)
+    if lock_fd is None:
+        print(
+            f"error: artifact dir already locked by another run: {rel_to_root(artifact_dir, root)}",
+            file=sys.stderr,
+        )
         return 2
 
-    print(
-        f"probing {len(sources)} files from {display_external_path(dataset_root, root)} "
-        f"into {rel_to_root(artifact_dir, root)}",
-        file=sys.stderr,
-    )
+    try:
+        if artifact_dir.exists():
+            shutil.rmtree(artifact_dir)
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
 
-    probe_ctx = ProbeContext(
-        root=root,
-        dataset_root=dataset_root,
-        artifact_dir=artifact_dir,
-        tmp_dir=tmp_dir,
-        env=env,
-        mlse_go_bin=mlse_go_bin,
-        mlse_go_ssa_dump_bin=mlse_go_ssa_dump_bin,
-        mlse_opt_bin=mlse_opt_bin,
-        mlir_opt_bin=mlir_opt_bin,
-        mlir_translate_bin=mlir_translate_bin,
-        opt_bin=opt_bin,
-        llvm_as_bin=llvm_as_bin,
-    )
-    start = time.time()
-    results: list[dict] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
-        futures = [executor.submit(probe_one, source, probe_ctx) for source in sources]
-        for future in concurrent.futures.as_completed(futures):
-            results.append(future.result())
+        env = os.environ.copy()
+        env["GOCACHE"] = str(tmp_dir / "go-build")
+        env["GOMODCACHE"] = str(tmp_dir / "gomodcache")
+        env["HOME"] = str(tmp_dir / "home")
+        ensure_dirs(
+            artifact_dir,
+            tmp_dir,
+            Path(env["GOCACHE"]),
+            Path(env["GOMODCACHE"]),
+            Path(env["HOME"]),
+        )
 
-    results.sort(key=lambda item: item["source_path"])
-    elapsed = time.time() - start
+        if not args.skip_build:
+            print("building mlse-go and mlse-opt...", file=sys.stderr)
+            build_tools(root, env)
 
-    tool_paths = {
-        "mlse_go_bin": mlse_go_bin,
-        "mlse_go_ssa_dump_bin": mlse_go_ssa_dump_bin,
-        "mlse_opt_bin": mlse_opt_bin,
-        "mlir_opt_bin": mlir_opt_bin,
-        "mlir_translate_bin": mlir_translate_bin,
-        "opt_bin": opt_bin,
-        "llvm_as_bin": llvm_as_bin,
-    }
-    summary = build_summary(
-        SummaryContext(
+        mlse_go_bin = discover_tool(args.mlse_go_bin, "mlse-go") or str(root / "artifacts" / "bin" / "mlse-go")
+        mlse_go_ssa_dump_bin = discover_tool("", "mlse-go-ssa-dump") or str(
+            root / "artifacts" / "bin" / "mlse-go-ssa-dump"
+        )
+        mlse_opt_bin = discover_tool(args.mlse_opt_bin, "mlse-opt") or str(
+            root / "tmp" / "cmake-mlir-build" / "tools" / "mlse-opt" / "mlse-opt"
+        )
+        mlir_opt_bin = discover_tool("", "mlir-opt")
+        mlir_translate_bin = discover_tool("", "mlir-translate")
+        opt_bin = discover_tool("", "opt")
+        llvm_as_bin = discover_tool("", "llvm-as")
+
+        for required in (mlse_go_bin, mlse_opt_bin):
+            if not required or not Path(required).is_file():
+                print(f"error: required binary not found: {required}", file=sys.stderr)
+                return 2
+
+        sources = collect_sources(dataset_root, args.case_glob, args.limit)
+        if not sources:
+            print("error: no source files matched", file=sys.stderr)
+            return 2
+
+        print(
+            f"probing {len(sources)} files from {display_external_path(dataset_root, root)} "
+            f"into {rel_to_root(artifact_dir, root)}",
+            file=sys.stderr,
+        )
+
+        probe_ctx = ProbeContext(
             root=root,
             dataset_root=dataset_root,
             artifact_dir=artifact_dir,
-            args=args,
-            tool_paths=tool_paths,
-        ),
-        results=results,
-        elapsed_seconds=elapsed,
-    )
-
-    write_text(artifact_dir / "results.json", json.dumps(results, indent=2, ensure_ascii=False) + "\n")
-    write_text(artifact_dir / "summary.json", json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-    write_summary_markdown(artifact_dir / "summary.md", summary, results)
-
-    counts = summary["counts"]
-    print(
-        json.dumps(
-            {
-                "total_files": counts.get("total_files", 0),
-                "frontend_success": counts.get("frontend_success", 0),
-                "mlse_opt_success": counts.get("mlse_opt_success", 0),
-                "llvm_eligible": counts.get("llvm_eligibility_eligible", 0),
-                "llvm_translate_success": counts.get("llvm_translate_success", 0),
-                "llvm_verify_success": counts.get("llvm_verify_success", 0),
-                "artifact_dir": rel_to_root(artifact_dir, root),
-            },
-            ensure_ascii=False,
+            tmp_dir=tmp_dir,
+            env=env,
+            mlse_go_bin=mlse_go_bin,
+            mlse_go_ssa_dump_bin=mlse_go_ssa_dump_bin,
+            mlse_opt_bin=mlse_opt_bin,
+            mlir_opt_bin=mlir_opt_bin,
+            mlir_translate_bin=mlir_translate_bin,
+            opt_bin=opt_bin,
+            llvm_as_bin=llvm_as_bin,
         )
-    )
-    return 0
+        start = time.time()
+        results: list[dict] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
+            futures = [executor.submit(probe_one, source, probe_ctx) for source in sources]
+            for future in concurrent.futures.as_completed(futures):
+                results.append(future.result())
+
+        results.sort(key=lambda item: item["source_path"])
+        elapsed = time.time() - start
+
+        tool_paths = {
+            "mlse_go_bin": mlse_go_bin,
+            "mlse_go_ssa_dump_bin": mlse_go_ssa_dump_bin,
+            "mlse_opt_bin": mlse_opt_bin,
+            "mlir_opt_bin": mlir_opt_bin,
+            "mlir_translate_bin": mlir_translate_bin,
+            "opt_bin": opt_bin,
+            "llvm_as_bin": llvm_as_bin,
+        }
+        summary = build_summary(
+            SummaryContext(
+                root=root,
+                dataset_root=dataset_root,
+                artifact_dir=artifact_dir,
+                args=args,
+                tool_paths=tool_paths,
+            ),
+            results=results,
+            elapsed_seconds=elapsed,
+        )
+
+        write_text(artifact_dir / "results.json", json.dumps(results, indent=2, ensure_ascii=False) + "\n")
+        write_text(artifact_dir / "summary.json", json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+        write_summary_markdown(artifact_dir / "summary.md", summary, results)
+
+        counts = summary["counts"]
+        print(
+            json.dumps(
+                {
+                    "total_files": counts.get("total_files", 0),
+                    "frontend_success": counts.get("frontend_success", 0),
+                    "mlse_opt_success": counts.get("mlse_opt_success", 0),
+                    "llvm_eligible": counts.get("llvm_eligibility_eligible", 0),
+                    "llvm_translate_success": counts.get("llvm_translate_success", 0),
+                    "llvm_verify_success": counts.get("llvm_verify_success", 0),
+                    "artifact_dir": rel_to_root(artifact_dir, root),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    finally:
+        release_lock(lock_path, lock_fd)
 
 
 if __name__ == "__main__":

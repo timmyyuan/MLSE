@@ -3,6 +3,7 @@ package gofrontend
 import (
 	"fmt"
 	"go/ast"
+	"go/types"
 	"strings"
 )
 
@@ -26,6 +27,43 @@ func extractTrailingReturnExprs(stmts []ast.Stmt) ([]ast.Stmt, []ast.Expr, bool)
 		return nil, nil, false
 	}
 	return stmts[:len(stmts)-1], ret.Results, true
+}
+
+func isFormalBuiltinPanicCall(call *ast.CallExpr, env *formalEnv) bool {
+	if call == nil {
+		return false
+	}
+	ident, ok := formalUnparenExpr(call.Fun).(*ast.Ident)
+	if !ok || ident.Name != "panic" {
+		return false
+	}
+	if env != nil {
+		if _, ok := env.locals[ident.Name]; ok {
+			return false
+		}
+	}
+	if env == nil || env.module == nil || env.module.typed == nil || env.module.typed.info == nil {
+		return true
+	}
+	obj := env.module.typed.info.ObjectOf(ident)
+	if obj == nil {
+		return true
+	}
+	builtin, ok := obj.(*types.Builtin)
+	return ok && builtin.Name() == "panic"
+}
+
+func emitFormalTerminatingStmt(stmt ast.Stmt, env *formalEnv) (string, bool) {
+	exprStmt, ok := stmt.(*ast.ExprStmt)
+	if !ok {
+		return "", false
+	}
+	call, ok := exprStmt.X.(*ast.CallExpr)
+	if !ok || !isFormalBuiltinPanicCall(call, env) {
+		return "", false
+	}
+	text, lowered := emitFormalCallStmt(call, env)
+	return text, lowered
 }
 
 // emitFormalReturnExprOperands lowers explicit return operands and coerces them to function result types.

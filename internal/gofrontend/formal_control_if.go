@@ -137,7 +137,7 @@ func emitFormalVoidBranchRegion(stmts []ast.Stmt, env *formalEnv) (string, bool)
 	}
 	body, terminated := emitFormalRegionBlock(stmts, env)
 	if terminated {
-		return "", false
+		return body, true
 	}
 	return body, true
 }

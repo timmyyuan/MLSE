@@ -11,7 +11,8 @@ func emitFormalStarExpr(expr *ast.StarExpr, hintedTy string, env *formalEnv) (st
 	}
 	tmp, loadedTy, loadPrelude, ok := emitFormalLoad(ptr, ptrTy, resultTy, env)
 	if ok {
-		return tmp, loadedTy, prelude + loadPrelude
+		coercedValue, coercedTy, coercedPrelude := coerceFormalValueToHint(tmp, loadedTy, hintedTy, env)
+		return coercedValue, coercedTy, prelude + loadPrelude + coercedPrelude
 	}
 	tmp, helperPrelude := emitFormalHelperCall(
 		formalHelperCallSpec{

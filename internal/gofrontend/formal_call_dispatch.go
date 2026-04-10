@@ -1,11 +1,24 @@
 package gofrontend
 
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"sort"
 	"strings"
 )
+
+type formalCapturedValue struct {
+	name  string
+	value string
+	ty    string
+}
+
+type formalCapturedCallInfo struct {
+	captures []formalCapturedValue
+	mutated  []string
+}
 
 func formalFuncSigFromType(fnType *ast.FuncType, module *formalModuleContext) formalFuncSig {
 	if fnType == nil {
@@ -55,6 +68,280 @@ func emitFormalFuncLitExpr(lit *ast.FuncLit, hintedTy string, env *formalEnv) (s
 	return tmp, funcTy, emitFormalLinef(lit, env, "    %s = func.constant @%s : %s", tmp, symbol, funcTy)
 }
 
+func emitFormalImmediateCapturedFuncLitCall(call *ast.CallExpr, env *formalEnv) ([]string, []string, string, bool) {
+	lit, ok := call.Fun.(*ast.FuncLit)
+	if !ok || env == nil || env.module == nil {
+		return nil, nil, "", false
+	}
+
+	info, ok := collectFormalCapturedFuncLitCallInfo(lit, env)
+	if !ok || len(info.captures) == 0 {
+		return nil, nil, "", false
+	}
+	if len(info.mutated) != 0 {
+		return emitFormalImmediateMutatingCapturedFuncLitCall(call, lit, info, env)
+	}
+
+	sig := formalFuncSigFromType(lit.Type, env.module)
+	argHints := []string(nil)
+	if len(sig.params) == len(call.Args) {
+		argHints = sig.params
+	}
+	args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args, argHints, env)
+
+	captureValues := make([]string, 0, len(info.captures))
+	captureTys := make([]string, 0, len(info.captures))
+	for _, capture := range info.captures {
+		captureValues = append(captureValues, capture.value)
+		captureTys = append(captureTys, capture.ty)
+	}
+
+	symbol := reserveFormalFuncLitSymbol(env.module, formalFuncSig{
+		params:  append(append([]string(nil), captureTys...), sig.params...),
+		results: append([]string(nil), sig.results...),
+	}, env.currentFunc)
+	addFormalGeneratedFunc(env.module, emitFormalCapturedFuncLitBody(symbol, lit, info.captures, env.module))
+
+	base := env.temp("call")
+	var buf strings.Builder
+	buf.WriteString(prelude)
+	buf.WriteString(formatFormalMultiResultCall(formalMultiResultCallSpec{
+		base:      base,
+		callee:    symbol,
+		args:      append(captureValues, args...),
+		argTys:    append(captureTys, argTys...),
+		resultTys: sig.results,
+	}))
+	return formalCallMultiResultRefs(base, sig.results), append([]string(nil), sig.results...), buf.String(), true
+}
+
+func collectFormalCapturedFuncLitCallInfo(lit *ast.FuncLit, env *formalEnv) (formalCapturedCallInfo, bool) {
+	captureNames := formalFuncLitCaptures(lit, env)
+	if len(captureNames) == 0 {
+		return formalCapturedCallInfo{}, false
+	}
+	mutated := formalFuncLitMutatedCaptureNames(lit, captureNames)
+
+	captures := make([]formalCapturedValue, 0, len(captureNames))
+	for _, name := range captureNames {
+		ty := env.typeOf(name)
+		if isFormalOpaquePlaceholderType(ty) {
+			return formalCapturedCallInfo{}, false
+		}
+		captures = append(captures, formalCapturedValue{
+			name:  name,
+			value: env.use(name),
+			ty:    ty,
+		})
+	}
+	return formalCapturedCallInfo{
+		captures: captures,
+		mutated:  mutated,
+	}, true
+}
+
+func formalFuncLitMutatedCaptureNames(lit *ast.FuncLit, captureNames []string) []string {
+	if lit == nil || lit.Body == nil || len(captureNames) == 0 {
+		return nil
+	}
+
+	captured := make(map[string]struct{}, len(captureNames))
+	for _, name := range captureNames {
+		captured[name] = struct{}{}
+	}
+
+	mutated := make(map[string]struct{})
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case nil:
+			return false
+		case *ast.FuncLit:
+			return false
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				ident, ok := lhs.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if _, ok := captured[ident.Name]; ok {
+					mutated[ident.Name] = struct{}{}
+				}
+			}
+		case *ast.IncDecStmt:
+			ident, ok := node.X.(*ast.Ident)
+			if ok {
+				if _, ok := captured[ident.Name]; ok {
+					mutated[ident.Name] = struct{}{}
+				}
+			}
+		case *ast.RangeStmt:
+			for _, expr := range []ast.Expr{node.Key, node.Value} {
+				ident, ok := expr.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if _, ok := captured[ident.Name]; ok && node.Tok != token.DEFINE {
+					mutated[ident.Name] = struct{}{}
+				}
+			}
+		}
+		return true
+	})
+	if len(mutated) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(mutated))
+	for name := range mutated {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func emitFormalImmediateMutatingCapturedFuncLitCall(call *ast.CallExpr, lit *ast.FuncLit, info formalCapturedCallInfo, env *formalEnv) ([]string, []string, string, bool) {
+	if lit == nil || lit.Body == nil || len(info.mutated) == 0 {
+		return nil, nil, "", false
+	}
+
+	sig := formalFuncSigFromType(lit.Type, env.module)
+	argHints := []string(nil)
+	if len(sig.params) == len(call.Args) {
+		argHints = sig.params
+	}
+	args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args, argHints, env)
+
+	workEnv := env.clone()
+	restoreNode := workEnv.pushNode(lit)
+	defer restoreNode()
+	workEnv.resultTypes = append([]string(nil), sig.results...)
+	for _, capture := range info.captures {
+		workEnv.bindValue(capture.name, capture.value, capture.ty)
+	}
+	if !bindFormalFuncLitCallArgs(lit.Type.Params, args, argTys, workEnv) {
+		return nil, nil, "", false
+	}
+
+	prefix, retExprs, ok := extractTrailingReturnExprs(lit.Body.List)
+	if !ok {
+		return nil, nil, "", false
+	}
+	bodyText, terminated := emitFormalRegionBlock(prefix, workEnv)
+	if terminated {
+		return nil, nil, "", false
+	}
+	retValues, retTypes, retPrelude, ok := emitFormalReturnExprOperands(retExprs, sig.results, workEnv)
+	if !ok {
+		return nil, nil, "", false
+	}
+
+	mutated := make([]formalCapturedValue, 0, len(info.mutated))
+	for _, name := range info.mutated {
+		ty := workEnv.typeOf(name)
+		if isFormalOpaquePlaceholderType(ty) {
+			return nil, nil, "", false
+		}
+		mutated = append(mutated, formalCapturedValue{
+			name:  name,
+			value: workEnv.use(name),
+			ty:    ty,
+		})
+	}
+
+	resultTypes := append([]string(nil), retTypes...)
+	resultValues := append([]string(nil), retValues...)
+	for _, capture := range mutated {
+		resultTypes = append(resultTypes, capture.ty)
+		resultValues = append(resultValues, capture.value)
+	}
+
+	base := env.temp("call")
+	var buf strings.Builder
+	buf.WriteString(prelude)
+	var region strings.Builder
+	region.WriteString(fmt.Sprintf("    %s = scf.execute_region -> (%s) {\n", formalIfResultBinding(base, len(resultTypes)), strings.Join(resultTypes, ", ")))
+	region.WriteString(indentBlock(bodyText, 1))
+	region.WriteString(indentBlock(retPrelude, 1))
+	region.WriteString(emitFormalLinef(lit, env, "      scf.yield %s : %s", strings.Join(resultValues, ", "), strings.Join(resultTypes, ", ")))
+	region.WriteString("    }\n")
+	buf.WriteString(annotateFormalStructuredOp(region.String(), lit, env))
+
+	refs := formalMultiResultRefs(base, len(resultTypes))
+	for i, capture := range mutated {
+		env.bindValue(capture.name, refs[len(retTypes)+i], capture.ty)
+	}
+	syncFormalTempID(env, workEnv)
+	return refs[:len(retTypes)], retTypes, buf.String(), true
+}
+
+func bindFormalFuncLitCallArgs(fields *ast.FieldList, values []string, types []string, env *formalEnv) bool {
+	if fields == nil || len(fields.List) == 0 {
+		return len(values) == 0 && len(types) == 0
+	}
+	index := 0
+	for _, field := range fields.List {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		for i := 0; i < count; i++ {
+			if index >= len(values) || index >= len(types) {
+				return false
+			}
+			if len(field.Names) != 0 {
+				name := field.Names[i].Name
+				if name != "_" {
+					env.bindValue(name, values[index], types[index])
+				}
+			}
+			index++
+		}
+	}
+	return index == len(values) && index == len(types)
+}
+
+func emitFormalCapturedFuncLitBody(symbol string, lit *ast.FuncLit, captures []formalCapturedValue, module *formalModuleContext) string {
+	env := newFormalEnv(module)
+	restoreNode := env.pushNode(lit)
+	defer restoreNode()
+	env.currentFunc = sanitizeName(symbol)
+	results := emitFormalResultTypes(lit.Type.Results, module)
+	env.resultTypes = append([]string(nil), results...)
+
+	params := make([]string, 0, len(captures))
+	for _, capture := range captures {
+		params = append(params, fmt.Sprintf("%s: %s", env.define(capture.name, capture.ty), capture.ty))
+	}
+	params = append(params, emitFormalParams(lit.Type.Params, env)...)
+
+	var buf strings.Builder
+	funcAttrs := ""
+	if module != nil {
+		funcAttrs = module.scopeAttrForNode(lit)
+	}
+	buf.WriteString(formatPrivateFuncHeaderWithAttrs(symbol, params, results, funcAttrs))
+
+	terminated := false
+	if lit.Body == nil {
+		buf.WriteString(emitFormalLinef(lit, env, "    go.todo %q", "missing_body"))
+	} else {
+		normalizedBody := normalizeFormalTopLevelLabelsWithReserved(
+			lit.Body.List,
+			collectFormalReservedNames(lit.Type, lit.Body),
+		)
+		bodyText, term := emitFormalFuncBlock(normalizedBody, env, results)
+		buf.WriteString(bodyText)
+		terminated = term
+	}
+	if !terminated {
+		if len(results) > 0 {
+			buf.WriteString(emitFormalLinef(lit, env, "    go.todo %q", "implicit_return_placeholder"))
+		}
+		buf.WriteString(emitFormalFallbackReturn(results, env))
+	}
+	buf.WriteString("  }\n")
+	return annotateFormalStructuredOp(buf.String(), lit, env)
+}
+
 func formalFuncLitCaptures(lit *ast.FuncLit, env *formalEnv) []string {
 	if lit == nil || env == nil {
 		return nil
@@ -84,6 +371,9 @@ func formalFuncLitCaptures(lit *ast.FuncLit, env *formalEnv) []string {
 		if isFormalDefinitionIdent(parent, ident) {
 			return true
 		}
+		if formalIdentIsPackageLevelObject(ident, env.module) {
+			return true
+		}
 		if _, ok := localNames[ident.Name]; ok {
 			return true
 		}
@@ -99,6 +389,25 @@ func formalFuncLitCaptures(lit *ast.FuncLit, env *formalEnv) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func formalIdentIsPackageLevelObject(ident *ast.Ident, module *formalModuleContext) bool {
+	if ident == nil || module == nil || module.typed == nil || module.typed.info == nil {
+		return false
+	}
+	obj := module.typed.info.ObjectOf(ident)
+	if obj == nil {
+		return false
+	}
+	switch obj.(type) {
+	case *types.PkgName:
+		return true
+	}
+	pkg := obj.Pkg()
+	if pkg == nil {
+		return false
+	}
+	return obj.Parent() == pkg.Scope()
 }
 
 func collectFormalFuncLocalNames(fnType *ast.FuncType, body *ast.BlockStmt) map[string]struct{} {
@@ -246,6 +555,13 @@ func formalExprFuncSig(expr ast.Expr, env *formalEnv) (formalFuncSig, bool) {
 	return parseFormalFuncType(inferFormalExprType(expr, env))
 }
 
+func formalCallActualResultType(call *ast.CallExpr, env *formalEnv) string {
+	if sig, ok := formalExprFuncSig(call.Fun, env); ok && len(sig.results) == 1 {
+		return sig.results[0]
+	}
+	return inferFormalCallResultType(call, "", env)
+}
+
 func emitFormalCallExpr(call *ast.CallExpr, hintedTy string, env *formalEnv) (string, string, string) {
 	if isMakeBuiltin(call) {
 		return emitFormalMakeCall(call, env)
@@ -262,6 +578,10 @@ func emitFormalCallExpr(call *ast.CallExpr, hintedTy string, env *formalEnv) (st
 		todoValue, todoTy, todoPrelude := emitFormalTodoValue("type_conversion", targetTy, env)
 		return todoValue, todoTy, prelude + todoPrelude
 	}
+	if values, types, prelude, ok := emitFormalImmediateCapturedFuncLitCall(call, env); ok && len(types) == 1 {
+		coercedValue, coercedTy, coercedPrelude := coerceFormalValueToHint(values[0], types[0], hintedTy, env)
+		return coercedValue, coercedTy, prelude + coercedPrelude
+	}
 	if value, ty, prelude, ok := emitFormalStdlibCall(call, hintedTy, env); ok {
 		return value, ty, prelude
 	}
@@ -277,11 +597,13 @@ func emitFormalCallExpr(call *ast.CallExpr, hintedTy string, env *formalEnv) (st
 	var buf strings.Builder
 	buf.WriteString(prelude)
 
-	resultTy := inferFormalCallResultType(call, hintedTy, env)
+	resultTy := formalCallActualResultType(call, env)
 	if symbol, ok := formalDirectCallSymbol(call.Fun, argTys, []string{resultTy}, env); ok {
 		tmp := env.temp("call")
 		buf.WriteString(emitFormalLinef(call, env, "    %s = func.call @%s(%s) : (%s) -> %s", tmp, symbol, strings.Join(args, ", "), strings.Join(argTys, ", "), resultTy))
-		return tmp, resultTy, buf.String()
+		coercedValue, coercedTy, coercedPrelude := coerceFormalValueToHint(tmp, resultTy, hintedTy, env)
+		buf.WriteString(coercedPrelude)
+		return coercedValue, coercedTy, buf.String()
 	}
 
 	sig, ok := formalExprFuncSig(call.Fun, env)
@@ -297,7 +619,9 @@ func emitFormalCallExpr(call *ast.CallExpr, hintedTy string, env *formalEnv) (st
 	buf.WriteString(calleePrelude)
 	tmp := env.temp("call")
 	buf.WriteString(emitFormalLinef(call, env, "    %s = func.call_indirect %s(%s) : (%s) -> %s", tmp, calleeValue, strings.Join(args, ", "), strings.Join(argTys, ", "), resultTy))
-	return tmp, resultTy, buf.String()
+	coercedValue, coercedTy, coercedPrelude := coerceFormalValueToHint(tmp, resultTy, hintedTy, env)
+	buf.WriteString(coercedPrelude)
+	return coercedValue, coercedTy, buf.String()
 }
 
 func emitFormalMakeCall(call *ast.CallExpr, env *formalEnv) (string, string, string) {
@@ -330,6 +654,9 @@ func emitFormalCallStmt(call *ast.CallExpr, env *formalEnv) (string, bool) {
 	if isFormalTypeConversionCall(call, env.module) {
 		return emitFormalLinef(call, env, "    go.todo %q", "type_conversion_stmt"), true
 	}
+	if _, _, prelude, ok := emitFormalImmediateCapturedFuncLitCall(call, env); ok {
+		return prelude, true
+	}
 	if text, ok := emitFormalStdlibCallStmt(call, env); ok {
 		return text, true
 	}
@@ -344,8 +671,33 @@ func emitFormalCallStmt(call *ast.CallExpr, env *formalEnv) (string, bool) {
 	var buf strings.Builder
 	buf.WriteString(prelude)
 
-	if symbol, ok := formalDirectCallSymbol(call.Fun, argTys, nil, env); ok {
-		buf.WriteString(emitFormalLinef(call, env, "    func.call @%s(%s) : (%s) -> ()", symbol, strings.Join(args, ", "), strings.Join(argTys, ", ")))
+	resultTys := []string(nil)
+	if sig, ok := formalExprFuncSig(call.Fun, env); ok {
+		resultTys = append([]string(nil), sig.results...)
+	} else {
+		resultTy := inferFormalCallResultType(call, "", env)
+		if !isFormalOpaquePlaceholderType(resultTy) {
+			resultTys = []string{resultTy}
+		}
+	}
+
+	if symbol, ok := formalDirectCallSymbol(call.Fun, argTys, resultTys, env); ok {
+		switch len(resultTys) {
+		case 0:
+			buf.WriteString(emitFormalLinef(call, env, "    func.call @%s(%s) : (%s) -> ()", symbol, strings.Join(args, ", "), strings.Join(argTys, ", ")))
+		case 1:
+			tmp := env.temp("call")
+			buf.WriteString(emitFormalLinef(call, env, "    %s = func.call @%s(%s) : (%s) -> %s", tmp, symbol, strings.Join(args, ", "), strings.Join(argTys, ", "), resultTys[0]))
+		default:
+			base := env.temp("call")
+			buf.WriteString(formatFormalMultiResultCall(formalMultiResultCallSpec{
+				base:      base,
+				callee:    symbol,
+				args:      args,
+				argTys:    argTys,
+				resultTys: resultTys,
+			}))
+		}
 		return buf.String(), true
 	}
 
@@ -353,13 +705,26 @@ func emitFormalCallStmt(call *ast.CallExpr, env *formalEnv) (string, bool) {
 	if !ok {
 		return emitFormalLinef(call, env, "    go.todo %q", "indirect_call_stmt"), true
 	}
-	if len(sig.results) != 0 {
-		return emitFormalLinef(call, env, "    go.todo %q", "discarded_call_result"), true
-	}
 	calleeTy := formatFormalFuncType(sig.params, sig.results)
 	calleeValue, _, calleePrelude := emitFormalExpr(call.Fun, calleeTy, env)
 	buf.WriteString(calleePrelude)
-	buf.WriteString(emitFormalLinef(call, env, "    func.call_indirect %s(%s) : (%s) -> ()", calleeValue, strings.Join(args, ", "), strings.Join(argTys, ", ")))
+	switch len(sig.results) {
+	case 0:
+		buf.WriteString(emitFormalLinef(call, env, "    func.call_indirect %s(%s) : (%s) -> ()", calleeValue, strings.Join(args, ", "), strings.Join(argTys, ", ")))
+	case 1:
+		tmp := env.temp("call")
+		buf.WriteString(emitFormalLinef(call, env, "    %s = func.call_indirect %s(%s) : (%s) -> %s", tmp, calleeValue, strings.Join(args, ", "), strings.Join(argTys, ", "), sig.results[0]))
+	default:
+		base := env.temp("call")
+		buf.WriteString(formatFormalMultiResultCall(formalMultiResultCallSpec{
+			base:      base,
+			callee:    calleeValue,
+			args:      args,
+			argTys:    argTys,
+			resultTys: sig.results,
+			indirect:  true,
+		}))
+	}
 	return buf.String(), true
 }
 

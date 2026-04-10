@@ -3,9 +3,10 @@ package gofrontend
 import "go/ast"
 
 type formalBinding struct {
-	current string
-	ty      string
-	funcSig *formalFuncSig
+	current   string
+	ty        string
+	funcSig   *formalFuncSig
+	boolConst string
 }
 
 type formalFuncSig struct {

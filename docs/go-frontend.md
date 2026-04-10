@@ -128,17 +128,22 @@ module attributes {go.scope_table = [...]} {
 - `CompositeLit` 当前至少已经覆盖 typed helper 字面量和空 slice literal；因此不再统一落回 `go.todo_value "CompositeLit"`
 - `&T{Field: v}` 和 `new(T)` 这类静态布局已知的 heap 分配，当前会优先收成 `runtime.newobject(size, align)`；其中 `&T{Field: v}` 还会继续接 `go.field_addr` + `go.store` 初始化字段，不再退回带完整类型后缀的 `runtime.new.*` helper 名
 - 多返回值函数上的 returning-`if` 当前也已经开始直接 lower 到多结果 `scf.if`
-- `for / range` 循环体里的函数级 early-return，当前也开始通过 `scf.for iter_args(stop, done, ret...)` 这类标准结构化形式 lower；简单 `break` 会直接把 loop-local `stop` 置位，不再落回 `go.todo "BranchStmt"`
+- `for / range` 循环体里的函数级 early-return，当前也开始通过 `scf.for iter_args(stop, done, ret...)` 和一部分 `scf.while(stop, done, ret, carried...)` 这类标准结构化形式 lower；简单 `break` 会直接把 loop-local `stop` 置位，不再落回 `go.todo "BranchStmt"`。这轮 counted-returning `for init; cond; post` 也开始直接走 `scf.for iter_args(stop, done, ret...)`；但 `init/post` 如果还是复杂 lvalue（例如多层 `index/selector` 回写），当前仍然显式留在 `go.todo "ForStmt"`
 - 普通 `for / range` 上的 carried 外层变量当前也不再只限单个值；像 `continue` 之前后同时更新多个局部累计值的 case，现在会直接收成多结果 `scf.if` + 多结果 `scf.for iter_args(...)`
 - `make([]T, ...)`、字符串字面量、`nil` 已经有正式 `go.*` op 承接；非 slice `make(...)` 当前会先走固定的 `runtime.make.<type>` ABI
 - `string` 比较、pointer 比较，以及 `error == nil` / `error != nil`、`slice == nil` / `slice != nil` 这类当前语义边界已经明确的 case，会优先收成 `go.eq` / `go.neq`；其余 opaque compare 当前仍可能保留 helper 路径
-- classic `for` 的简单 counted 形态当前也开始直接 lower 到 `scf.for`
+- `string` 的 `+=` 当前也开始直接走正式路径：右侧如果还是 string 表达式，会先按现有 `string + string` 规则收成 `runtime.add.string`，再通过统一 assign-target 回写，不再退回 `go.todo "compound_assign"`
+- `++ / --` 当前也不再只限局部标识符；`*ptr`、field/index assign-target，以及函数内的 nonlocal identifier shadow update，当前都会复用统一的 assign-target 路径，不再一律退回 `go.todo "IncDecStmt"` / `go.todo "incdec_non_local"`；其中 array-like index 的结果类型会优先吃 typed hint，避免再被误判成 `incdec_non_integer`
+- classic `for` 的 counted 形态当前会直接 lower 到 `scf.for`；这轮补上的范围已经从原来的 `<` / `i++` 扩到 `< <= > >=`，以及 `i++ / i-- / i += 1 / i -= 1 / i = i +/- 1`，并统一改成“trip count + 实际 iv 映射”的 `scf.for` 方案。空 loop body、loop 之后继续使用 induction variable 的 exit-value 恢复、以及一部分 counted-returning `for` 都不再退回 `go.todo "ForStmt"` 或 `go.todo_value "loop_iv_exit"`；更宽的一部分不含当前层 `break/continue/label` 的通用 `for init; cond; post` 仍然继续走 `scf.while`
+- builtin `panic(...)` 当前会被当成终止语句；因此“函数尾部直接 `panic`”以及 `if { return ... } ; panic(...)` 这类 returning-if suffix，当前也开始直接 lower 成正式 `scf.if -> (...)`，不再额外落回 `go.todo "IfStmt_returning_region"` / `go.todo "implicit_return_placeholder"`
+- 受限的 `goto/label` 当前也开始正式进入结构化控制流路径：forward `goto` 的 noop / break 子集不再保留 `go.todo`，而 backward `goto/label` 现在会先归一化成 synthetic restart-loop，再收成标准 `scf.while`；这条路径已经覆盖顶层函数体和 nested block（例如 `if` body）里的 backward label，不再把这类 case 留给 `go.todo "BranchStmt"` / `go.todo "LabeledStmt"` / `go.todo "implicit_return_placeholder"`
 - 控制流不允许再用 statement helper escape hatch 伪装成 extern call；像 `IfStmt_returning_region`、`IfStmt_condition`、复杂 `ForStmt` 这类还没结构化收敛的 case，当前会显式保留成 `go.todo`
 - 这轮 scheme B 之后，repo-owned fixture 和 `mlse-opt --lower-go-bootstrap` 已经覆盖 `go.field_addr` / `go.load` / `go.store`；其中带静态 `offset` 的 `go.field_addr` 在 bootstrap lowering 会优先直接 lower 成 byte-offset `llvm.getelementptr`，只有拿不到稳定 offset 的路径才保留 `runtime.field.addr.<Field>` helper
-- 外部 gobench probe 当前这轮已经达到全绿；最新结果以 `artifacts/go-gobench-mlir-suite/summary.{md,json}` 为准，当前是 `frontend_success = 249/249`、`mlse_opt_success = 249/249`、`llvm_eligible = 249/249`、`llvm_verify_success = 249/249`
-- 类型断言、解引用，以及更复杂的浮点/非整数算术长尾，当前仍可能通过 typed helper call 维持可解析性；但像 `float64(x)`、浮点常量、以及直接 `f32/f64` 二元算术这类更小的 typed-aware 子集，当前已经开始直接 lower 到 `arith.sitofp` / `arith.fptosi` / `arith.{addf,subf,mulf,divf,cmpf}`；这不再扩展到控制流结构
+- 外部 `goeq-spec-*` gobench probe 当前这轮已经达到全绿；最新结果以 `artifacts/go-gobench-mlir-suite/summary.{md,json}` 为准，当前是 `frontend_success = 249/249`、`mlse_opt_success = 249/249`、`llvm_eligible = 249/249`、`llvm_verify_success = 249/249`
+- 外部 `goeq-dce-*` probe 当前也已经达到全绿；最新这轮在 `../gobench-eq/dataset/cases/goeq-dce-*` 的 `330` 个非 test Go 文件上做到了 `frontend_success = 330/330`、`mlse_opt_success = 330/330`、`llvm_eligible = 330/330`、`llvm_verify_success = 330/330`。这一轮最后补齐的控制流长尾是 backward `goto/label`：顶层和 nested block 里的 restart-loop 形态现在都能走正式 lowering，不再作为 residual blocker 留在 `go.todo`
+- 类型断言、解引用，以及更复杂的 closure / 控制流长尾，当前仍可能通过 typed helper call 或 `go.todo` / `go.todo_value` 维持可解析性；但像 `float64(x)`、浮点常量、直接 `f32/f64` 二元算术、整型 `%` / `&` / `|` / `^`，以及一元 `+` / `^` 这类更小的 typed-aware 子集，当前已经开始直接 lower 到 `arith.sitofp` / `arith.fptosi` / `arith.{addf,subf,mulf,divf,cmpf,remsi,remui,andi,ori,xori}`；对 `uint*` 的 `/` / `%` / 比较当前也会优先选择 `ui` / `u*` 变体，而不再统一按 signed 语义发射
 - `switch / defer / go` 等结构当前还没有真正 lower 到稳定的标准/正式 IR；会先用 `go.todo` / `go.todo_value` 占位
-- 捕获外层变量的 `FuncLit` 当前仍然没有 closure 表示，仍会回退到 `go.todo_value`
+- 捕获外层变量的 `FuncLit` 当前仍然没有通用 closure object 表示；但“立即调用”的子集这轮又往前推了一步：capture 只读时会继续 lower 成 private generated `func.func` + 显式 capture 参数，而一部分“立即调用 + capture write-back + 末尾显式 return”的子集，当前也会直接在 call-site 收成多结果 `scf.execute_region`，把返回值和写回后的 capture 一起带出。另一个刚补上的边界是：如果 `FuncLit` 只引用 package-scope 对象，frontend 当前不会再把这些名字误当成 lexical capture。其余需要真正 closure value、逃逸闭包，或者更复杂 returning-region 的路径，当前仍会回退到 `go.todo_value`
 - 更复杂的 `if / for` 形态当前不会再伪装成控制流 helper；后续继续逐步替换成更结构化的 lowering
 
 ## 当前设计取舍

@@ -61,15 +61,12 @@ func emitFormalElemAddr(spec formalElemAddrSpec, env *formalEnv) (string, string
 	), true
 }
 
-func emitFormalLoad(addr string, addrTy string, resultTy string, env *formalEnv) (string, string, string, bool) {
+func emitFormalLoad(addr string, addrTy string, _ string, env *formalEnv) (string, string, string, bool) {
 	addrTy = normalizeFormalType(addrTy)
 	if !isFormalPointerType(addrTy) {
 		return "", "", "", false
 	}
-	resultTy = normalizeFormalType(resultTy)
-	if isFormalOpaquePlaceholderType(resultTy) {
-		resultTy = formalDerefType(addrTy)
-	}
+	resultTy := formalDerefType(addrTy)
 	tmp := env.temp("load")
 	return tmp, resultTy, emitFormalLinef(nil, env, "    %s = go.load %s : %s -> %s",
 		tmp, addr, addrTy, resultTy,
@@ -182,7 +179,8 @@ func emitFormalSelectorExpr(expr *ast.SelectorExpr, hintedTy string, env *formal
 	if ok {
 		tmp, loadedTy, loadPrelude, loadOK := emitFormalLoad(fieldAddr, fieldAddrTy, ty, env)
 		if loadOK {
-			return tmp, loadedTy, basePrelude + fieldAddrPrelude + loadPrelude
+			coercedValue, coercedTy, coercedPrelude := coerceFormalValueToHint(tmp, loadedTy, hintedTy, env)
+			return coercedValue, coercedTy, basePrelude + fieldAddrPrelude + loadPrelude + coercedPrelude
 		}
 	}
 	tmp, helperPrelude := emitFormalHelperCall(

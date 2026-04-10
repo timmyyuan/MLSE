@@ -18,6 +18,9 @@ type formalMultiResultCallSpec struct {
 
 // emitFormalAssignStmt lowers Go assignments into SSA rebinding or helper-based updates.
 func emitFormalAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
+	if isFormalCompoundAssignToken(s.Tok) {
+		return emitFormalCompoundAssignStmt(s, env)
+	}
 	if len(s.Rhs) == 1 && len(s.Lhs) > 1 {
 		return emitFormalExpandedAssignStmt(s, env)
 	}
@@ -40,6 +43,14 @@ func emitFormalAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
 			}
 			value, ty, prelude := emitFormalExpr(s.Rhs[i], hint, env)
 			buf.WriteString(prelude)
+			boolConst := ""
+			if valueBool, ok := formalKnownBoolExpr(s.Rhs[i], env); ok {
+				if valueBool {
+					boolConst = "true"
+				} else {
+					boolConst = "false"
+				}
+			}
 			switch s.Tok {
 			case token.DEFINE:
 				env.defineOrAssign(ident.Name, ty)
@@ -48,7 +59,7 @@ func emitFormalAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
 			default:
 				env.assign(ident.Name, ty)
 			}
-			env.bindValue(ident.Name, value, ty)
+			env.bindValueWithBool(ident.Name, value, ty, boolConst)
 			continue
 		}
 
@@ -66,6 +77,58 @@ func emitFormalAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
 		buf.WriteString(assignText)
 	}
 	return buf.String()
+}
+
+func emitFormalCompoundAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
+	if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
+		return emitFormalLinef(s, env, "    go.todo %q", "compound_assign_arity_mismatch")
+	}
+	op, ok := formalCompoundAssignBinaryToken(s.Tok)
+	if !ok {
+		return emitFormalLinef(s, env, "    go.todo %q", "compound_assign")
+	}
+
+	hint := formalAssignTargetType(s.Lhs[0], env)
+	currentValue, currentTy, currentPrelude := emitFormalExpr(s.Lhs[0], hint, env)
+	rhsHint := currentTy
+	if isFormalOpaquePlaceholderType(rhsHint) {
+		rhsHint = inferFormalExprType(s.Rhs[0], env)
+	}
+	rhsValue, rhsTy, rhsPrelude := emitFormalExpr(s.Rhs[0], rhsHint, env)
+	nextValue, nextTy, nextPrelude, ok := emitFormalBinaryOpValues(op, formalBinaryOperands{
+		lhs:   currentValue,
+		lhsTy: currentTy,
+		rhs:   rhsValue,
+		rhsTy: rhsTy,
+	}, s, env)
+	if !ok {
+		return currentPrelude + rhsPrelude + emitFormalLinef(s, env, "    go.todo %q", "compound_assign")
+	}
+	assignText, ok := emitFormalAssignTargetValue(s.Lhs[0], nextValue, nextTy, env)
+	if !ok {
+		return currentPrelude + rhsPrelude + nextPrelude + emitFormalLinef(s, env, "    go.todo %q", "assign_target")
+	}
+	return currentPrelude + rhsPrelude + nextPrelude + assignText
+}
+
+func isFormalCompoundAssignToken(tok token.Token) bool {
+	switch tok {
+	case token.ADD_ASSIGN, token.SUB_ASSIGN:
+		return true
+	default:
+		return false
+	}
+}
+
+func formalCompoundAssignBinaryToken(tok token.Token) (token.Token, bool) {
+	switch tok {
+	case token.ADD_ASSIGN:
+		return token.ADD, true
+	case token.SUB_ASSIGN:
+		return token.SUB, true
+	default:
+		return token.ILLEGAL, false
+	}
 }
 
 func emitFormalExpandedAssignStmt(s *ast.AssignStmt, env *formalEnv) string {
@@ -160,6 +223,9 @@ func emitFormalExpandedCallExpr(call *ast.CallExpr, env *formalEnv) ([]string, [
 	if isFormalTypeConversionCall(call, env.module) {
 		return nil, nil, "", false
 	}
+	if values, types, prelude, ok := emitFormalImmediateCapturedFuncLitCall(call, env); ok && len(types) > 1 {
+		return values, types, prelude, true
+	}
 
 	sig, ok := formalExprFuncSig(call.Fun, env)
 	if !ok || len(sig.results) <= 1 {
@@ -247,13 +313,24 @@ func formalCallMultiResultRefs(base string, resultTys []string) []string {
 }
 
 func formalAssignTargetType(lhs ast.Expr, env *formalEnv) string {
+	lhs = formalUnparenExpr(lhs)
 	switch target := lhs.(type) {
 	case *ast.Ident:
 		if target.Name == "_" {
 			return formalOpaqueType("value")
 		}
+		if env != nil && env.module != nil {
+			if typedTy, ok := formalTypedExprType(target, env.module); ok && isFormalTypedInfoUsableType(typedTy) {
+				return typedTy
+			}
+		}
 		return env.typeOf(target.Name)
 	case *ast.IndexExpr:
+		if env != nil && env.module != nil {
+			if typedTy, ok := formalTypedExprType(target, env.module); ok && isFormalTypedInfoUsableType(typedTy) {
+				return typedTy
+			}
+		}
 		return formalIndexResultType(inferFormalExprType(target.X, env))
 	case *ast.StarExpr:
 		return formalDerefType(inferFormalExprType(target.X, env))
@@ -262,8 +339,23 @@ func formalAssignTargetType(lhs ast.Expr, env *formalEnv) string {
 	}
 }
 
+func emitFormalAssignTargetValueRebind(lhs ast.Expr, value string, valueTy string, env *formalEnv) (string, bool) {
+	if env == nil {
+		return "", false
+	}
+	rebindEnv := env.clone()
+	text, ok := emitFormalAssignTargetValue(lhs, value, valueTy, rebindEnv)
+	syncFormalTempID(env, rebindEnv)
+	if !ok {
+		return "", false
+	}
+	env.locals = rebindEnv.locals
+	return text, true
+}
+
 // emitFormalAssignTargetValue updates non-identifier lvalues and rebinds the root when needed.
 func emitFormalAssignTargetValue(lhs ast.Expr, value string, valueTy string, env *formalEnv) (string, bool) {
+	lhs = formalUnparenExpr(lhs)
 	switch target := lhs.(type) {
 	case *ast.Ident:
 		if target.Name == "_" {
@@ -303,7 +395,7 @@ func emitFormalAssignTargetValue(lhs ast.Expr, value string, valueTy string, env
 			},
 			env,
 		)
-		rebindPrelude, ok := emitFormalAssignTargetValue(target.X, updatedBase, baseTy, env)
+		rebindPrelude, ok := emitFormalAssignTargetValueRebind(target.X, updatedBase, baseTy, env)
 		if !ok {
 			return "", false
 		}
@@ -338,7 +430,7 @@ func emitFormalAssignTargetValue(lhs ast.Expr, value string, valueTy string, env
 			},
 			env,
 		)
-		rebindPrelude, ok := emitFormalAssignTargetValue(target.X, updatedSource, sourceTy, env)
+		rebindPrelude, ok := emitFormalAssignTargetValueRebind(target.X, updatedSource, sourceTy, env)
 		if !ok {
 			return "", false
 		}
@@ -359,7 +451,7 @@ func emitFormalAssignTargetValue(lhs ast.Expr, value string, valueTy string, env
 			},
 			env,
 		)
-		rebindPrelude, ok := emitFormalAssignTargetValue(target.X, updatedPtr, ptrTy, env)
+		rebindPrelude, ok := emitFormalAssignTargetValueRebind(target.X, updatedPtr, ptrTy, env)
 		if !ok {
 			return "", false
 		}

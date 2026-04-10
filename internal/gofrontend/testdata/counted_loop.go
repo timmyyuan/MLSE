@@ -2,6 +2,7 @@
 // CHECK: scf.for
 // CHECK: iter_args(
 // CHECK-NOT: go.todo "ForStmt"
+// CHECK-NOT: go.todo_value "loop_iv_exit"
 package demo
 
 func sumTo(n int) int {

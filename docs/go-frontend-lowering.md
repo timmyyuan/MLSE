@@ -57,9 +57,9 @@ formal FileCheck 和 LLVM FileCheck 分别在：
 | `internal/gofrontend/formal_runtime.go` | `emitFormalRuntimeCall` `emitFormalRuntimePackAnyArgs` `emitFormalRuntimeNewObject` | frontend 侧统一 runtime ABI：`newobject`、`runtime.make.*`、`runtime.fmt.*`、`runtime.any.box.*` | `make_map.go` `string_call.go` `new_builtin.go` |
 | `internal/gofrontend/formal_control_stmt.go` | `emitFormalReturnStmt` `emitFormalDeclStmt` `emitFormalIfStmt` `emitFormalForStmt` `emitFormalRangeStmt` | 语句级 lowering，包括 `if/for/range` 和局部声明 | `if_merge.go` `classic_for.go` `range_slice.go` |
 | `internal/gofrontend/formal_control_return_dispatch.go` | `emitFormalTerminatingIfStmt` `emitFormalReturningIfStmt` `emitFormalReturningRegion` `emitFormalReturnValues` | returning-region 识别、`if` early-return merge、return 默认值组装 | `prefixed_returning_if.go` `multi_return_if.go` |
-| `internal/gofrontend/formal_type_expr.go` | `emitFormalBinaryExpr` `emitFormalUnaryExpr` `emitFormalZeroValue` `emitFormalTodoValue` | 通用二元/一元表达式、`go.eq/go.neq`、零值和 todo value | `default_simple_add.go` `selector_string_compare.go` |
+| `internal/gofrontend/formal_type_expr.go` | `emitFormalBinaryExpr` `emitFormalUnaryExpr` `emitFormalZeroValue` `emitFormalTodoValue` | 通用二元/一元表达式、`go.eq/go.neq`、整型 `%` / `&` / `|` / `^` 和一元 `+` / `^` 的直接 `arith.*` lowering、零值和 todo value | `default_simple_add.go` `selector_string_compare.go` `bitwise_binary.go` |
 | `internal/gofrontend/formal_call_dispatch.go` | `emitFormalCallExpr` `emitFormalCallStmt` `emitFormalFuncLitExpr` `formalExprFuncSig` | 通用 call dispatch、函数值/`FuncLit`、以及 stdlib/runtime facade 接线 | `single_arg_call.go` `func_literal_callback.go` `string_call.go` |
-| `internal/gofrontend/formal_memory_assign.go` | `emitFormalAssignStmt` `emitFormalExpandedAssignStmt` `emitFormalAssignTargetValue` | 标识符赋值、`_` 丢弃、selector/index/deref 赋值 | `assign_targets.go` |
+| `internal/gofrontend/formal_memory_assign.go` | `emitFormalAssignStmt` `emitFormalExpandedAssignStmt` `emitFormalAssignTargetValue` | 标识符赋值、`_` 丢弃、selector/index/deref 赋值，以及 `string +=` 这类 compound assign 回写 | `assign_targets.go` `string_compound_assign.go` |
 | `internal/gofrontend/formal_control_block.go` | `emitFormalFuncBlock` `emitFormalRegionBlock` | block 扫描、returning-region matcher 接线 | `prefixed_returning_if.go` `range_return.go` |
 | `internal/gofrontend/formal_control_branch.go` | `emitFormalLoopBody` `emitFormalLoopBodyWithCarried` | loop body 中的 `continue` 形态，以及单/多 carried value 的 `scf.if` yield | `range_continue.go` `range_continue_prefix.go` `range_multi_iter_args.go` |
 | `internal/gofrontend/formal_call_builtins.go` | `emitFormalBuiltinCall` `emitFormalLenCapBuiltinCall` `emitFormalAppendBuiltinCall` `emitFormalAppendSliceBuiltinCall` `emitFormalGoLenValue` `emitFormalIndexedReadValue` `emitFormalGoIndexValue` | `len/cap/index/append/append(dst, src...)` 的直接 `go.*` op 路径；slice 索引优先地址化 | `len_builtin.go` `cap_builtin.go` `index_builtin.go` `append_builtin.go` `append_spread_builtin.go` |
@@ -208,6 +208,7 @@ return %ifret9 : i32
 ```
 
 多返回值版本看 `internal/gofrontend/testdata/multi_return_if.go`；递归 nested returning-if 看 `internal/gofrontend/testdata/nested_returning_if.go`。
+这轮还额外补上了 builtin `panic(...)` 作为 terminating suffix 的路径：像 `if { return x } ; panic("boom")` 这类形状，当前也会直接收成 `scf.if -> (...)`，不再退回 `IfStmt_returning_region` / `implicit_return_placeholder`。
 
 ## Loops, Continue And Loop-Body Return
 
@@ -244,6 +245,112 @@ scf.for %i_iv8 = %idx5 to %idx6 step %const7 {
     %load11 = go.load %elem10 : !go.ptr<!go.string> -> !go.string
 }
 ```
+
+这一层当前还有两点补充：
+
+- 空 body 的 counted `for` 不再因为 `len(body) == 0` 直接落回 `go.todo "ForStmt"`
+- 对当前已经支持的 `<` / `+1` counted `for`，如果 loop 之后还继续使用 induction variable，frontend 会直接发 `arith.cmpi + arith.select` 恢复 exit value，而不是再塞一个 `go.todo_value "loop_iv_exit"`
+- counted `for` 当前已经从 `< / i++` 扩到 `< <= > >=`，以及 `i++ / i-- / i += 1 / i -= 1 / i = i +/- 1`；实现上不再直接把 loop IV 当成 `scf.for` induction variable，而是统一先算 trip count，再在 loop body 里把实际 IV 重建出来
+- 对一部分不含当前层 `break/continue/label` 的通用 `for init; cond; post`，frontend 也开始直接 lower 到 `scf.while`；这轮主要覆盖 `>=` / `<=` / `==` 条件、`+=` / `-=` 这类 post/update 形态，以及一部分 loop body 里直接 `return` 的 carried-local 子集
+- counted-returning `for init; cond; post` 当前也开始复用同一套 trip-count lowering，直接 lower 到 `scf.for iter_args(stop, done, ret...)`
+- 普通 loop body 里的 nested returning loop 当前也开始复用 returning-loop matcher，不再一律因为“内层 loop 含 return”而退回 `go.todo "ForStmt"`
+- returning-loop 这条 `scf.while(stop, done, ret, carried...)` 路径当前还带一条显式边界：如果 `init` / `post` 自身就是复杂 lvalue 回写（例如多层 `index/selector`），frontend 仍然会保守退回 `go.todo "ForStmt"`，而不是继续生成可能不合法的 nested store SSA
+- `emitFormalIncDecStmt` 当前也已经和 `emitFormalAssignTargetValue` 接上：`ident++` 之外，`(*p)++`、`x[i]++`、`x.f--` 以及函数内的 nonlocal identifier `g--`，都会先读出当前值、做 `arith.addi/subi`，再走统一 assign-target 回写；对 array-like index，这一步还会优先用 typed result hint 把 `runtime.index.value__sig*` 直接收成整数结果，避免再误落 `go.todo "incdec_non_integer"`
+
+### backward `goto/label`
+
+fixture：
+
+- `internal/gofrontend/testdata/goto_backward_return.go`
+- `internal/gofrontend/testdata/goto_backward_nested_if.go`
+
+变化前：
+
+```go
+if y {
+lbl:
+	x++
+	if x < 4 {
+		goto lbl
+	}
+}
+return x
+```
+
+以前这类 case 容易在两处退化：
+
+- backward `goto` 直接留成 `go.todo "BranchStmt"` / `go.todo "LabeledStmt"`
+- synthetic restart-loop 虽然被识别出来，但函数 exit tail 还留在 loop 内，最后又补出 `go.todo "implicit_return_placeholder"`
+
+现在这条路径会先做 AST 归一化：
+
+- backward label region 改写成 synthetic restart flag
+- 函数 exit tail 从 restart loop 里切出来，保留在 loop 外
+- 这个归一化不只跑在函数体顶层，也会递归处理 nested block / `if` body / labeled stmt
+
+变化后：
+
+```mlir
+%ifret36 = scf.if %y -> (i64) {
+    %loop30:3 = scf.while (%loop_stop_iter21 = %loopstop20, %__mlse_goto_restart_lbl_iter23 = %const19, %x_iter25 = %x) : (i1, i1, i64) -> (i1, i1, i64) {
+      ...
+      %loopcont35:3 = scf.if %bin32 -> (i1, i1, i64) {
+          scf.yield %loopstop34, %const33, %inc30 : i1, i1, i64
+      } else {
+          scf.yield %loopstop33, %const28, %inc30 : i1, i1, i64
+      }
+      ...
+    }
+    scf.yield %loop30#2 : i64
+} else {
+    scf.yield %x : i64
+}
+return %ifret36 : i64
+```
+
+这一步的关键不是“把 `goto` 伪装成 helper call”，而是：
+
+- 保持在 frontend 里完成控制流结构化
+- 让 backward restart-loop 最终落到标准 `scf.while`
+- 明确把 loop-exit tail 留在 loop 外，避免再污染 return/SSA env
+
+### 立即调用的 captured `func lit`
+
+fixture：
+
+- `internal/gofrontend/testdata/captured_immediate_call.go`
+- `internal/gofrontend/testdata/captured_immediate_mutate_local.go`
+- `internal/gofrontend/testdata/captured_immediate_mutate_param.go`
+
+变化前：
+
+```go
+return func(z int) int {
+	return x + z
+}(3)
+```
+
+会先落成 `go.todo_value "FuncLit_capture"`，再接一个 `func.call_indirect`。
+
+现在分两档：
+
+- 如果 `func lit` 是立即调用
+- 并且 capture 只读，不会在 `func lit` 里对 captured name 做重新赋值
+
+frontend 会直接：
+
+- 生成一个 private `func.func`
+- 把 captured value 追加到参数列表前面
+- 在 callsite 发 `func.call @...`，不再走 closure placeholder / indirect call
+
+如果 `func lit` 也是立即调用，但它会对 captured local / param 做直接赋值或 `++/--`，并且当前还能收成“末尾显式 `return`”这一类简单 body，frontend 会改走另一条更窄的路径：
+
+- 不再生成 private helper
+- 直接在 callsite 发一个多结果 `scf.execute_region`
+- region 结果会同时带出“正常返回值 + 写回后的 capture 值”
+- callsite 再把这些写回值重绑回外层 env
+
+这一步仍然不是通用 closure lowering。需要真正 closure object、逃逸闭包，或者更复杂 returning-region / control-flow 的 capture write-back，当前仍然保留 `go.todo_value "FuncLit_capture"`。不过如果 `func lit` 只引用 package-scope 对象，frontend 当前会直接把它当成“无 lexical capture”的立即调用子集处理，不再把 package-global 名字误记进 capture 集合。
 
 ### `range` + `continue`
 

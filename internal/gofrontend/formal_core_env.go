@@ -25,6 +25,9 @@ func (e *formalEnv) define(name string, ty string) string {
 		if ty != "" {
 			binding.ty = ty
 			binding.funcSig = formalFuncSigForType(ty)
+			if ty != "i1" {
+				binding.boolConst = ""
+			}
 		}
 		return binding.current
 	}
@@ -41,6 +44,9 @@ func (e *formalEnv) assign(name string, ty string) string {
 	if ty != "" {
 		binding.ty = ty
 		binding.funcSig = formalFuncSigForType(ty)
+		if ty != "i1" {
+			binding.boolConst = ""
+		}
 	}
 	return binding.current
 }
@@ -53,15 +59,21 @@ func (e *formalEnv) defineOrAssign(name string, ty string) string {
 }
 
 func (e *formalEnv) bindValue(name string, value string, ty string) {
+	e.bindValueWithBool(name, value, ty, "")
+}
+
+func (e *formalEnv) bindValueWithBool(name string, value string, ty string, boolConst string) {
+	boolConst = normalizeFormalBoolConst(ty, boolConst)
 	if binding, ok := e.locals[name]; ok {
 		binding.current = value
 		if ty != "" {
 			binding.ty = ty
 			binding.funcSig = formalFuncSigForType(ty)
 		}
+		binding.boolConst = boolConst
 		return
 	}
-	e.locals[name] = &formalBinding{current: value, ty: ty, funcSig: formalFuncSigForType(ty)}
+	e.locals[name] = &formalBinding{current: value, ty: ty, funcSig: formalFuncSigForType(ty), boolConst: boolConst}
 }
 
 func (e *formalEnv) use(name string) string {
@@ -76,6 +88,18 @@ func (e *formalEnv) typeOf(name string) string {
 		return binding.ty
 	}
 	return formalOpaqueType("value")
+}
+
+func (e *formalEnv) boolConstOf(name string) (bool, bool) {
+	if binding, ok := e.locals[name]; ok {
+		switch binding.boolConst {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 func (e *formalEnv) temp(prefix string) string {

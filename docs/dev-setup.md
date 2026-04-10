@@ -8,20 +8,21 @@ MLSE 当前还处于早期原型阶段。
 
 - Go `1.25+`
 - Docker（用于 tinygo 基础镜像与实验）
-- LLVM/MLIR 开发安装（可选，用于构建 `mlse-opt`）
+- LLVM/MLIR 开发安装（可选，用于构建 `mlse-opt` 和 `mlse-run`）
 
 ## 当前可用命令
 
 统一入口位于 `scripts/`：
 
 - `scripts/build.sh`：构建当前 Go MVP 工具
-- `scripts/build-mlir.sh`：配置并构建 `mlse-opt` 的最小 MLIR/LLVM 工程链路
+- `scripts/build-mlir.sh`：配置并构建 `mlse-opt` / `mlse-run` 的最小 MLIR/LLVM 工程链路
 - `scripts/test.sh`：运行仓库主线 Go 测试
 - `scripts/test-all.sh`：运行仓库当前统一测试入口，覆盖 Go、linters 和 repo-owned MLIR bridge 样例
 - `scripts/fmt.sh`：格式化仓库 Go 代码
 - `scripts/lint.sh`：运行仓库当前的 Go/C++/Python 规范检查
 - `scripts/clean.sh`：清理仓库内临时产物和 tinygo 实验目录
 - `scripts/go-gobench-mlir-suite.py`：对外部 `../gobench-eq` Go 样本跑 formal MLIR / `mlse-opt` round-trip / `mlse-opt --lower-go-bootstrap` / LLVM probe
+- `scripts/go-exec-diff-suite.py`：对 repo-owned `test/GoExec/cases/` 样例跑 native Go vs `mlse-run` 的 stdout / stderr 差分
 
 ### 构建
 
@@ -64,6 +65,7 @@ scripts/test-all.sh
 - `mlse-opt --lower-go-builtins` 对 `test/GoIR/ir/bootstrap_ops.mlir` 的 builtin lowering 检查
 - `mlse-opt --lower-go-bootstrap` 对 `test/GoIR/ir/bootstrap_ops.mlir` 的 bootstrap lowering 检查
 - `cmd/mlse-go` 生成并桥接验证 `examples/go/simple_add.go`、`sign_if.go`、`choose_merge.go`、`sum_for.go`
+- `scripts/go-exec-diff-suite.py --skip-build`，验证 `test/GoExec/cases/goexec-spec-*` 的 native Go vs `mlse-run` 差分
 
 其中 `mlir-fixtures` 和 `frontend-bridge` 两段会逐个打印正在跑的文件，以及对应的 `PASS` / `FAIL` 状态。
 
@@ -129,7 +131,10 @@ scripts/build-mlir.sh
 
 ```text
 tmp/cmake-mlir-build/tools/mlse-opt/mlse-opt
+tmp/cmake-mlir-build/tools/mlse-run/mlse-run
 ```
+
+当前 `mlse-run` 的 MVP 只支持 LLVM-dialect MLIR 输入，也就是更接近 `05-llvm-dialect.mlir` 这一层；`.ll` / LLVM IR importer 还没有在当前仓库里落地。
 
 ### 运行 Go 前端 MVP
 
@@ -164,12 +169,25 @@ python3 scripts/go-gobench-mlir-suite.py
 
 ```text
 artifacts/go-gobench-mlir-suite/
-tmp/go-gobench-mlir-suite/
+tmp/go-gobench-mlir-suite/<artifact-dir-name>-<hash>/
 ```
 
 这些目录都位于仓库内，且不会进入 git 提交物。
-这条 suite 现在按覆盖式落盘工作：每次运行都会先清空当前 `artifact-dir` 和 `tmp-dir`，再重建阶段产物，因此同一目录下不会混着旧命名残留。
+这条 suite 现在按覆盖式落盘工作：每次运行都会先清空当前 `artifact-dir`，并重建一个按 `artifact-dir` 名字和稳定 hash 派生的 scratch 目录；因此即使不同输出目录只是在标点或路径分隔上看起来相近，也不会再误落到同一个临时树。同时脚本会对 `artifact-dir` 使用内核级文件锁，同一个输出目录如果已经有 run 在执行，会直接报错而不是互删产物，也不会再因为旧 pid 文件或 pid 复用产生误判。
 如果显式传入 `--case-glob`，当前也只会跑你指定的 glob；不再隐式追加默认的 `goeq-spec-*` 全量扫描。
+
+当前 CLI 保留的是最常用的一层：
+
+- `--case-glob`
+- `--limit`
+- `--jobs`
+- `--skip-build`
+- `--artifact-dir`
+- `--dataset-root`
+- `--mlse-go-bin`
+- `--mlse-opt-bin`
+
+其余仓库根、scratch 路径和 LLVM 工具路径都改成脚本内部自动发现，不再暴露成顶层参数。
 
 每个源文件对应的 artifact 目录现在会按阶段编号保存关键产物；同时每个 case 会共享一份源码树：
 
@@ -203,6 +221,12 @@ tmp/cmake-mlir-build/tools/mlse-opt/mlse-opt --lower-go-builtins test/GoIR/ir/bo
 
 ```bash
 tmp/cmake-mlir-build/tools/mlse-opt/mlse-opt --lower-go-bootstrap test/GoIR/ir/bootstrap_ops.mlir
+```
+
+如果你要直接执行一份已经 lower 到 LLVM dialect 的 MLIR，可以运行：
+
+```bash
+tmp/cmake-mlir-build/tools/mlse-run/mlse-run path/to/05-llvm-dialect.mlir
 ```
 
 ## 目录约定
