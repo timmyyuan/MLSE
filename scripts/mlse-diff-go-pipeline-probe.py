@@ -170,7 +170,7 @@ def build_klee_harness(metadata: dict[str, Any], old_symbol: str, new_symbol: st
         for item in params
     )
     return f"""extern void klee_make_symbolic(void *addr, unsigned long nbytes, const char *name);
-extern void klee_assert(int condition);
+extern void klee_report_error(const char *file, int line, const char *message, const char *suffix) __attribute__((noreturn));
 
 extern {ret} {old_symbol}({decl});
 extern {ret} {new_symbol}({decl});
@@ -178,7 +178,11 @@ extern {ret} {new_symbol}({decl});
 int main(void) {{
 {declarations}
 {symbolic}
-  klee_assert({old_symbol}({names}) == {new_symbol}({names}));
+  {ret} old_result = {old_symbol}({names});
+  {ret} new_result = {new_symbol}({names});
+  if (old_result != new_result) {{
+    klee_report_error("mlse-diff-go-pipeline-probe", __LINE__, "symbolic diff mismatch", "assert.err");
+  }}
   return 0;
 }}
 """
@@ -186,9 +190,10 @@ int main(void) {{
 
 def classify_klee_result(expected: str, klee_out: Path, proc: subprocess.CompletedProcess[str]) -> str:
     assert_errors = list(klee_out.glob("*.assert.err"))
+    all_errors = list(klee_out.glob("*.err"))
     if expected == "counterexample" and assert_errors:
         return "counterexample"
-    if expected == "equivalent" and not assert_errors and proc.returncode == 0:
+    if expected == "equivalent" and not all_errors and proc.returncode == 0:
         return "equivalent"
     return "inconclusive"
 
@@ -262,7 +267,10 @@ def run_klee_diff(
             "linked_bitcode": str(linked_bc),
         }
     )
-    assert_errors = sorted(str(path) for path in klee_out.glob("*.assert.err"))
+    all_errors = sorted(str(path) for path in klee_out.glob("*.err"))
+    assert_errors = [path for path in all_errors if path.endswith(".assert.err")]
+    if all_errors:
+        record["klee_error_files"] = all_errors
     if assert_errors:
         record["counterexample_errors"] = assert_errors
     if actual != metadata["expected_status"]:

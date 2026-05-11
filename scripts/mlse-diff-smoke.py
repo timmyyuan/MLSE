@@ -104,7 +104,7 @@ def build_c_smoke_source(metadata: dict[str, Any]) -> str:
     declarations = "\n".join(f"  {item['ctype']} {item['name']} = 0;" for item in params)
     symbolic_block = "\n".join(symbolic)
     return f"""extern void klee_make_symbolic(void *addr, unsigned long nbytes, const char *name);
-extern void klee_assert(int condition);
+extern void klee_report_error(const char *file, int line, const char *message, const char *suffix) __attribute__((noreturn));
 
 static {ret} oldF({decl}) {{
   return {model["old_return"]};
@@ -117,7 +117,11 @@ static {ret} newF({decl}) {{
 int main(void) {{
 {declarations}
 {symbolic_block}
-  klee_assert(oldF({names}) == newF({names}));
+  {ret} old_result = oldF({names});
+  {ret} new_result = newF({names});
+  if (old_result != new_result) {{
+    klee_report_error("mlse-diff-smoke", __LINE__, "symbolic diff mismatch", "assert.err");
+  }}
   return 0;
 }}
 """
@@ -136,9 +140,10 @@ def run_command(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 def classify_klee_result(expected: str, out_dir: Path, proc: subprocess.CompletedProcess[str]) -> str:
     assert_errors = list(out_dir.glob("*.assert.err"))
+    all_errors = list(out_dir.glob("*.err"))
     if expected == "counterexample" and assert_errors:
         return "counterexample"
-    if expected == "equivalent" and not assert_errors and proc.returncode == 0:
+    if expected == "equivalent" and not all_errors and proc.returncode == 0:
         return "equivalent"
     return "inconclusive"
 
@@ -160,7 +165,10 @@ def run_klee_smoke(metadata: dict[str, Any], out_dir: Path, clang: str, klee: st
     (out_dir / "klee.stderr").write_text(klee_proc.stderr, encoding="utf-8")
     status = classify_klee_result(metadata["expected_status"], klee_out, klee_proc)
     result: dict[str, Any] = {"status": status, "klee_output_dir": str(klee_out)}
-    assert_errors = sorted(str(path) for path in klee_out.glob("*.assert.err"))
+    all_errors = sorted(str(path) for path in klee_out.glob("*.err"))
+    assert_errors = [path for path in all_errors if path.endswith(".assert.err")]
+    if all_errors:
+        result["klee_error_files"] = all_errors
     if assert_errors:
         result["counterexample_errors"] = assert_errors
     if status == "inconclusive":
@@ -219,6 +227,8 @@ def main() -> int:
     }
     write_json(emit_root / "summary.json", summary)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
+    if args.run_klee_toolchain_smoke and summary["status"] != "ok":
+        return 1
     return 0
 
 

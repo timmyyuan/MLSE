@@ -268,7 +268,7 @@ artifacts/symbolic-diff-smoke/<case>/case.json
 python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
 ```
 
-这条 smoke 会根据 `case.json` 里的 `c_model` 生成一个极小 C harness，编译成 LLVM bitcode，再交给 KLEE。它的作用是验证 KLEE / LLVM bitcode 工具链，不代表 Go/MLSE 的完整 symbolic diff 已经完成。
+这条 smoke 会根据 `case.json` 里的 `c_model` 生成一个极小 C harness，编译成 LLVM bitcode，再交给 KLEE；mismatch 路径通过 `klee_report_error(..., "assert.err")` 产生反例文件。带 `--run-klee-toolchain-smoke` 时，如果结果是 `inconclusive`，脚本会返回失败。它的作用是验证 KLEE / LLVM bitcode 工具链，不代表 Go/MLSE 的完整 symbolic diff 已经完成。
 
 如果要确认真正 Go 链路当前卡在哪，可以运行：
 
@@ -276,7 +276,7 @@ python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
 python3 scripts/mlse-diff-go-pipeline-probe.py
 ```
 
-这条探针会把 `old.go` / `new.go` 分别跑到 `mlse-go -> mlse-opt -> mlse-opt --lower-go-bootstrap -> mlir-opt -> mlir-translate -> llvm-as`，并在 `artifacts/symbolic-diff-go-pipeline-probe/summary.json` 里记录第一个阻塞点。它当前只验证单边 Go 函数已经能产出 bitcode；old/new same-input KLEE harness、bitcode 链接和 KLEE 结果分类仍是后续工作。
+这条探针会把 `old.go` / `new.go` 分别跑到 `mlse-go -> mlse-opt -> mlse-opt --lower-go-bootstrap -> mlir-opt -> mlir-translate -> llvm-as`，并在 `artifacts/symbolic-diff-go-pipeline-probe/summary.json` 里记录第一个阻塞点。不带 `--run-klee` 时，它只验证 old/new 两侧 Go 函数已经能产出 bitcode。
 
 在带 KLEE 的容器内可以运行完整标量 smoke：
 
@@ -284,7 +284,7 @@ python3 scripts/mlse-diff-go-pipeline-probe.py
 python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok
 ```
 
-这条命令会为当前 repo-owned 标量样例生成 same-input KLEE harness，重命名并链接 old/new bitcode，再检查等价样例无反例、非等价样例能产生 assertion counterexample。
+这条命令会为当前 repo-owned 标量样例生成 same-input KLEE harness，重命名并链接 old/new bitcode，再检查等价样例无 KLEE `.err` 文件、非等价样例能通过 `assert.err` 产生 counterexample。
 
 ### Docker 环境
 
