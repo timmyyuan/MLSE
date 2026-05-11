@@ -33,6 +33,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 
 - `test/SymbolicDiff/cases/`：old/new 函数级等价测试样例
 - `scripts/mlse-diff-smoke.py`：fixture 与 KLEE 工具链 smoke 入口
+- `scripts/mlse-diff-fuzz-smoke.py`：coverage-guided concrete same-input diff smoke，用于早期发现反例但不作为等价证明
 - `docker/Dockerfile.symbolic-diff`：面向后续 KLEE vertical slice 的容器环境
 
 这部分当前用于搭建 #9 的测试与运行环境，还不是完整的函数等价证明链路。

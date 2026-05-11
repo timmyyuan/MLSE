@@ -280,6 +280,20 @@ python3 scripts/mlse-diff-go-pipeline-probe.py
 
 这条探针会把 `old.go` / `new.go` 分别跑到 `mlse-go -> mlse-opt -> mlse-opt --lower-go-bootstrap -> mlir-opt -> mlir-translate -> llvm-as`，并在 `artifacts/symbolic-diff-go-pipeline-probe/summary.json` 里记录第一个阻塞点。不带 `--run-klee` 时，它只验证 old/new 两侧 Go 函数已经能产出 bitcode。
 
+如果想先用 concrete 输入快速探索 old/new 是否出现可观测差异，可以运行：
+
+```bash
+python3 scripts/mlse-diff-fuzz-smoke.py
+```
+
+这条入口会把每个 case 的 `old.go` / `new.go` 改写成两个临时 Go package，生成 same-input Go test harness，并逐 seed 运行 `go test -coverprofile`。每个 seed 都会比较 old/new 的返回值、panic、以及可观测入参变更；覆盖率有提升的 seed 会记录到 `selected_inputs`。输出状态包括：
+
+- `fuzz-counterexample`：某个 concrete seed 已经触发 old/new 可观测差异
+- `fuzz-no-diff-found`：当前 seed 集合没有发现差异；这不是等价证明
+- `skipped` / `blocked`：当前 fixture 缺外部包、签名不可从外部 harness 调用，或 harness 编译失败
+
+CI 里只跑一组稳定快路径，用来验证这层 concrete fuzz 链路能发现已知反例，并能给部分等价样例产出 coverage 报告。全量 case 可以本地按需扩大 `--iterations`；结果应作为 fuzz 信号，不应替代 KLEE / bounded exhaustive 的 `equivalent` 结论。
+
 在带 KLEE 的容器内可以运行完整标量 smoke：
 
 ```bash
@@ -327,7 +341,7 @@ python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
 
 这条 workflow 会在 GitHub runner 上跑三层检查：
 
-- `go-smoke`：`go test ./cmd/... ./internal/...`、Python 脚本语法检查、`python3 scripts/mlse-diff-smoke.py`
+- `go-smoke`：`go test ./cmd/... ./internal/...`、Python 脚本语法检查、`python3 scripts/mlse-diff-smoke.py`，以及一组 concrete fuzz diff 快路径
 - `dockerfile-check`：`docker build --check -f docker/Dockerfile.symbolic-diff .`
 - `docker-symbolic-diff`：用 GitHub Actions cache 构建 `docker/Dockerfile.symbolic-diff`，再在容器内运行 `scripts/build.sh`、`scripts/build-mlir.sh`、`python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke` 和 `python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok`
 

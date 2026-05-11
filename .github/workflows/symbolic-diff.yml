@@ -43,11 +43,30 @@ jobs:
           python3 -m py_compile \
             scripts/mlse-diff-smoke.py \
             scripts/mlse-diff-go-pipeline-probe.py \
+            scripts/mlse-diff-fuzz-smoke.py \
             scripts/go-exec-diff-suite.py \
             scripts/go-gobench-mlir-suite.py
 
       - name: Prepare symbolic-diff fixtures
         run: python3 scripts/mlse-diff-smoke.py
+
+      - name: Run concrete fuzz diff smoke
+        run: |
+          python3 scripts/mlse-diff-fuzz-smoke.py \
+            --case scalar-add-commutative \
+            --case scalar-add-shift \
+            --case motus-mod10-foo1-foo2 \
+            --case motus-mod11-normnil1-normnil2 \
+            --case motus-mod14-foo1-foo2 \
+            --case motus-mod16-foo1-foo2 \
+            --case motus-mod21-foo1-foo2 \
+            --case motus-mod22-foo1-foo2 \
+            --case motus-mod25-rollback1-rollback2 \
+            --case motus-mod36-pipegetresult1-pipegetresult2 \
+            --case motus-mod38-format1-format2 \
+            --case motus-mod39-foo-bar \
+            --iterations 4 \
+            --expect-status ok
 
   dockerfile-check:
     name: Dockerfile check
