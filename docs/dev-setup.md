@@ -270,6 +270,14 @@ python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
 
 这条 smoke 会根据 `case.json` 里的 `c_model` 生成一个极小 C harness，编译成 LLVM bitcode，再交给 KLEE。它的作用是验证 KLEE / LLVM bitcode 工具链，不代表 Go/MLSE 的完整 symbolic diff 已经完成。
 
+如果要确认真正 Go 链路当前卡在哪，可以运行：
+
+```bash
+python3 scripts/mlse-diff-go-pipeline-probe.py
+```
+
+这条探针会把 `old.go` / `new.go` 分别跑到 `mlse-go -> mlse-opt -> mlse-opt --lower-go-bootstrap -> mlir-opt -> mlir-translate -> llvm-as`，并在 `artifacts/symbolic-diff-go-pipeline-probe/summary.json` 里记录第一个阻塞点。它当前只验证单边 Go 函数已经能产出 bitcode；old/new same-input KLEE harness、bitcode 链接和 KLEE 结果分类仍是后续工作。
+
 ### Docker 环境
 
 构建 symbolic diff 开发镜像：
@@ -306,7 +314,7 @@ python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
 
 - `go-smoke`：`go test ./cmd/... ./internal/...`、Python 脚本语法检查、`python3 scripts/mlse-diff-smoke.py`
 - `dockerfile-check`：`docker build --check -f docker/Dockerfile.symbolic-diff .`
-- `docker-symbolic-diff`：用 GitHub Actions cache 构建 `docker/Dockerfile.symbolic-diff`，再在容器内运行 `scripts/build.sh`、`scripts/build-mlir.sh` 和 `python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke`
+- `docker-symbolic-diff`：用 GitHub Actions cache 构建 `docker/Dockerfile.symbolic-diff`，再在容器内运行 `scripts/build.sh`、`scripts/build-mlir.sh`、`python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke` 和 `python3 scripts/mlse-diff-go-pipeline-probe.py --expect-blocker same_input_klee_harness_missing`
 
 也就是说，后续 KLEE / LLVM / MLIR 的完整环境验证会交给 GitHub CI 资源运行；本机开发只需要在必要时手动构建镜像。
 
