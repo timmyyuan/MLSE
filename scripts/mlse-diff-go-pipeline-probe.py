@@ -229,6 +229,16 @@ entry:
   ret {{ ptr, i64, i64 }} %slice2
 }}
 
+define {{ ptr, i64, i64 }} @runtime.makeslice(i64 %len, i64 %cap) {{
+entry:
+  %bytes = mul i64 %cap, 8
+  %buf = call ptr @malloc(i64 %bytes)
+  %slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %buf, 0
+  %slice1 = insertvalue {{ ptr, i64, i64 }} %slice0, i64 %len, 1
+  %slice2 = insertvalue {{ ptr, i64, i64 }} %slice1, i64 %cap, 2
+  ret {{ ptr, i64, i64 }} %slice2
+}}
+
 define i1 @__mlse_slice_i64_equal({{ ptr, i64, i64 }} %a, {{ ptr, i64, i64 }} %b) {{
 entry:
   %alen = extractvalue {{ ptr, i64, i64 }} %a, 1
@@ -289,6 +299,8 @@ def build_klee_harness(metadata: dict[str, Any], old_symbol: str, new_symbol: st
     model = metadata.get("klee_model", {})
     if model.get("abi") == "slice_i64":
         return "llvm_ir", build_slice_i64_klee_harness(metadata, old_symbol, new_symbol)
+    if "c_model" not in metadata:
+        raise ValueError("missing c_model or supported klee_model")
     return "c", build_scalar_klee_harness(metadata, old_symbol, new_symbol)
 
 
@@ -340,7 +352,12 @@ def run_klee_diff(
     harness_bc = out_dir / "10-klee-harness.bc"
     linked_bc = out_dir / "11-linked.bc"
     klee_out = out_dir / "klee-out"
-    harness_kind, harness_text = build_klee_harness(metadata, old_symbol, new_symbol)
+    try:
+        harness_kind, harness_text = build_klee_harness(metadata, old_symbol, new_symbol)
+    except ValueError as exc:
+        record["status"] = "blocked"
+        record["reason"] = str(exc)
+        return record, "klee_model_unavailable"
     if harness_kind == "llvm_ir":
         harness_source = out_dir / "09-klee-harness.ll"
         harness_source.write_text(harness_text, encoding="utf-8")
@@ -467,6 +484,9 @@ def probe_case(case_dir: Path, emit_root: Path, tools: dict[str, str | None]) ->
         "artifact_dir": str(out_dir),
         "sides": [],
     }
+    expected_blocker = metadata.get("expected_blocker", "")
+    if expected_blocker:
+        result["expected_blocker"] = expected_blocker
     first_blocker: str | None = None
     for label in ("old", "new"):
         source = case_dir / f"{label}.go"
@@ -479,12 +499,14 @@ def probe_case(case_dir: Path, emit_root: Path, tools: dict[str, str | None]) ->
     if first_blocker:
         result["status"] = "blocked"
         result["first_blocker"] = first_blocker
+        result["expectation_met"] = first_blocker == expected_blocker
         return result
 
     if not tools["run_klee"]:
         result["status"] = "blocked"
         result["first_blocker"] = "klee_run_not_requested"
         result["missing_work"] = ["rerun with --run-klee to execute the linked same-input harness"]
+        result["expectation_met"] = result["first_blocker"] == expected_blocker
         return result
 
     klee_record, blocker = run_klee_diff(metadata, out_dir, tools)
@@ -492,9 +514,11 @@ def probe_case(case_dir: Path, emit_root: Path, tools: dict[str, str | None]) ->
     if blocker:
         result["status"] = "blocked"
         result["first_blocker"] = blocker
+        result["expectation_met"] = blocker == expected_blocker
         return result
 
     result["status"] = klee_record["status"]
+    result["expectation_met"] = result["status"] == result["expected_status"]
     return result
 
 
@@ -517,11 +541,24 @@ def main() -> int:
     }
     cases = collect_case_dirs(resolve_path(args.cases_root), args.case)
     results = [probe_case(case_dir, emit_root, tools) for case_dir in cases]
-    blockers = sorted({item["first_blocker"] for item in results if item.get("first_blocker")})
+    blockers = sorted(
+        {
+            item["first_blocker"]
+            for item in results
+            if item.get("first_blocker") and item.get("first_blocker") != item.get("expected_blocker")
+        }
+    )
+    expected_blockers = sorted(
+        {
+            item["first_blocker"]
+            for item in results
+            if item.get("first_blocker") and item.get("first_blocker") == item.get("expected_blocker")
+        }
+    )
     failures = [
         item["case"]
         for item in results
-        if not item.get("first_blocker") and item["status"] != item["expected_status"]
+        if not item.get("first_blocker") and not item.get("expectation_met", item["status"] == item["expected_status"])
     ]
     status = "ok"
     if blockers:
@@ -533,6 +570,7 @@ def main() -> int:
         "elapsed_seconds": round(time.time() - started, 3),
         "tools": tools,
         "first_blockers": blockers,
+        "expected_blockers": expected_blockers,
         "failures": failures,
         "results": results,
     }

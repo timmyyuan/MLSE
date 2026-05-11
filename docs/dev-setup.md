@@ -247,6 +247,7 @@ test/SymbolicDiff/cases/
 - `scalar-add-commutative`：`x + 1` vs `1 + x`，期望等价
 - `scalar-add-shift`：`x + 1` vs `x + 2`，期望 KLEE 找到反例
 - `motus-mod3-slice-append`：从 Motus `smtcmp/testdata/mod3` 抽出的 `append(res, pl[0])` slice 等价样例，当前 KLEE harness 固定输入 slice 长度为 `1`，比较返回 slice 的长度和元素值
+- `motus-mod4` 到 `motus-mod39`：从 Motus `pkg/analysis/ssa/smtcmp/testdata/` 批量抽出的函数级 old/new fixture；其中 `mod4`、`mod5`、`mod6`、`mod7`、`mod9` 当前也会进入最小 `[]int` KLEE harness，其余 case 作为 expected blocker 进入 readiness matrix
 
 本机没有 KLEE 时，也可以先检查 fixture 和 artifact 布局：
 
@@ -285,7 +286,12 @@ python3 scripts/mlse-diff-go-pipeline-probe.py
 python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok
 ```
 
-这条命令会为当前 repo-owned 样例生成 same-input KLEE harness，重命名并链接 old/new bitcode，再检查等价样例无 KLEE `.err` 文件、非等价样例能通过 `assert.err` 产生 counterexample。当前 slice harness 只覆盖 `[]int` 的最小 ABI：输入 slice 使用一个 symbolic `i64` 元素，runtime 只建模 `runtime.growslice` 和 `runtime.panic.index` 的测试所需行为。
+这条命令会为当前 repo-owned 样例生成 same-input KLEE harness，重命名并链接 old/new bitcode，再检查等价样例无 KLEE `.err` 文件、非等价样例能通过 `assert.err` 产生 counterexample。当前 slice harness 只覆盖 `[]int` 的最小 ABI：输入 slice 使用一个 symbolic `i64` 元素，runtime 只建模 `runtime.growslice`、`runtime.makeslice` 和 `runtime.panic.index` 的测试所需行为。
+
+Motus 批量样例里暂未进入 KLEE 的 case 会在 `case.json` 中声明 `expected_blocker`。CI 会继续跑到真实阻塞点，并要求它和声明一致；这样可以把当前缺口固定下来，而不是把 unsupported 语义伪装成已证明等价。当前主要 blocker 是：
+
+- `klee_model_unavailable`：Go/MLIR/LLVM bitcode 已可达，但还缺对应参数 / 返回值 / runtime 的 KLEE model
+- `old_mlse_opt_roundtrip_failed`：frontend 产物尚不能通过 `mlse-opt` round-trip，常见于 `any`、复杂 aggregate、type assertion、variadic / helper 调用等边界
 
 ### Docker 环境
 

@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod27-getpsmrelatedpluginlist1-getpsmrelatedpluginlist2",
+  "description": "Motus smtcmp mod27: GetPsmRelatedPluginList1 vs GetPsmRelatedPluginList2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod27",
+    "old_function": "GetPsmRelatedPluginList1",
+    "new_function": "GetPsmRelatedPluginList2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

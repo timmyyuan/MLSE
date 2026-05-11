@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod12-getallpsm1-getallpsm2",
+  "description": "Motus smtcmp mod12: GetAllPsm1 vs GetAllPsm2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod12",
+    "old_function": "GetAllPsm1",
+    "new_function": "GetAllPsm2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

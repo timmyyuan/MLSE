@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod39-foo-bar",
+  "description": "Motus smtcmp mod39: Foo vs Bar.",
+  "function": "diffcase.F",
+  "expected_status": "counterexample",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod39",
+    "old_function": "Foo",
+    "new_function": "Bar"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

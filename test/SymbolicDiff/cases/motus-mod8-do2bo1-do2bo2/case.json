@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod8-do2bo1-do2bo2",
+  "description": "Motus smtcmp mod8: Do2Bo1 vs Do2Bo2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod8",
+    "old_function": "Do2Bo1",
+    "new_function": "Do2Bo2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}
