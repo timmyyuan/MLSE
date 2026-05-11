@@ -292,7 +292,7 @@ scripts/build-mlir.sh
 python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
 ```
 
-镜像默认使用 LLVM/MLIR `16` 并从源码构建 KLEE。这个选择是为了让 KLEE 与产生 bitcode 的 LLVM 工具版本保持一致；当前本机 Homebrew 默认脚本仍可用 LLVM `20`。如果后续要改 LLVM 版本，需要同时确认 MLSE 的 MLIR C++ API、`mlir-go` 绑定和 KLEE 支持范围。
+镜像默认使用 LLVM/MLIR `20` 并从源码构建 KLEE。这个选择是为了让仓库当前 Go dialect 依赖的 MLIR C++ API、`mlir-go` 绑定目标和 KLEE 处理的 bitcode 工具版本保持一致。如果后续要改 LLVM 版本，需要同时确认 MLSE 的 MLIR C++ API、`mlir-go` 绑定和 KLEE 支持范围。
 
 ### GitHub Actions
 

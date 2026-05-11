@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export LLVM_VERSION=${LLVM_VERSION:-16}
+export LLVM_VERSION=${LLVM_VERSION:-20}
 export LLVM_PREFIX=${LLVM_PREFIX:-/usr/lib/llvm-${LLVM_VERSION}}
 export MLIR_DIR=${MLIR_DIR:-${LLVM_PREFIX}/lib/cmake/mlir}
 export LLVM_DIR=${LLVM_DIR:-${LLVM_PREFIX}/lib/cmake/llvm}

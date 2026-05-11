@@ -80,7 +80,7 @@ jobs:
           tags: mlse-symbolic-diff:ci
           load: true
           build-args: |
-            LLVM_VERSION=16
+            LLVM_VERSION=20
             KLEE_REF=master
           cache-from: type=gha,scope=mlse-symbolic-diff
           cache-to: type=gha,mode=max,scope=mlse-symbolic-diff
