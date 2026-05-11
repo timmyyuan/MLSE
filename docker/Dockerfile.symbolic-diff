@@ -40,6 +40,7 @@ RUN wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh \
     lld-${LLVM_VERSION} \
     libcap-dev \
     libmlir-${LLVM_VERSION}-dev \
+    libsqlite3-dev \
     libz3-dev \
     llvm-${LLVM_VERSION} \
     llvm-${LLVM_VERSION}-dev \
