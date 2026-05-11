@@ -10,7 +10,13 @@ LLVM_DIR=${LLVM_DIR:-$LLVM_PREFIX/lib/cmake/llvm}
 CMAKE_C_COMPILER=${CMAKE_C_COMPILER:-$LLVM_PREFIX/bin/clang}
 CMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER:-$LLVM_PREFIX/bin/clang++}
 BUILD_DIR=${BUILD_DIR:-$ROOT/tmp/cmake-mlir-build}
-SDKROOT=${SDKROOT:-$(xcrun --show-sdk-path)}
+if [ -z "${SDKROOT+x}" ]; then
+  if command -v xcrun >/dev/null 2>&1; then
+    SDKROOT=$(xcrun --show-sdk-path)
+  else
+    SDKROOT=
+  fi
+fi
 
 if [ ! -f "$MLIR_DIR/MLIRConfig.cmake" ]; then
   echo "error: MLIRConfig.cmake not found at: $MLIR_DIR" >&2
@@ -21,13 +27,21 @@ fi
 mkdir -p "$BUILD_DIR"
 rm -f "$BUILD_DIR/CMakeCache.txt"
 
-cmake -S "$ROOT" -B "$BUILD_DIR" \
-  -DCMAKE_PREFIX_PATH="$LLVM_PREFIX" \
-  -DMLIR_DIR="$MLIR_DIR" \
-  -DLLVM_DIR="$LLVM_DIR" \
-  -DCMAKE_C_COMPILER="$CMAKE_C_COMPILER" \
-  -DCMAKE_CXX_COMPILER="$CMAKE_CXX_COMPILER" \
-  -DCMAKE_CXX_FLAGS="-isysroot $SDKROOT"
+cmake_args=(
+  -S "$ROOT"
+  -B "$BUILD_DIR"
+  -DCMAKE_PREFIX_PATH="$LLVM_PREFIX"
+  -DMLIR_DIR="$MLIR_DIR"
+  -DLLVM_DIR="$LLVM_DIR"
+  -DCMAKE_C_COMPILER="$CMAKE_C_COMPILER"
+  -DCMAKE_CXX_COMPILER="$CMAKE_CXX_COMPILER"
+)
+
+if [ -n "$SDKROOT" ]; then
+  cmake_args+=(-DCMAKE_CXX_FLAGS="-isysroot $SDKROOT")
+fi
+
+cmake "${cmake_args[@]}"
 
 cmake --build "$BUILD_DIR" --target mlse-opt mlse-run -j4
 

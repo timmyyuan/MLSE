@@ -23,6 +23,9 @@ MLSE 当前还处于早期原型阶段。
 - `scripts/clean.sh`：清理仓库内临时产物和 tinygo 实验目录
 - `scripts/go-gobench-mlir-suite.py`：对外部 `../gobench-eq` Go 样本跑 formal MLIR / `mlse-opt` round-trip / `mlse-opt --lower-go-bootstrap` / LLVM probe
 - `scripts/go-exec-diff-suite.py`：对 repo-owned `test/GoExec/cases/` 样例跑 native Go vs `mlse-run` 的 stdout / stderr 差分
+- `scripts/mlse-diff-smoke.py`：准备函数级 symbolic diff fixtures，并可在安装了 KLEE 的环境里跑最小 KLEE 工具链 smoke
+- `scripts/docker-symbolic-diff-build.sh`：构建 symbolic diff / KLEE 开发镜像
+- `scripts/docker-symbolic-diff-run.sh`：以当前仓库挂载方式进入 symbolic diff / KLEE 开发镜像
 
 ### 构建
 
@@ -229,6 +232,84 @@ tmp/cmake-mlir-build/tools/mlse-opt/mlse-opt --lower-go-bootstrap test/GoIR/ir/b
 tmp/cmake-mlir-build/tools/mlse-run/mlse-run path/to/05-llvm-dialect.mlir
 ```
 
+## 函数级 symbolic diff 早期环境
+
+仓库现在为后续“代码更改后函数是否等价”的 KLEE vertical slice 先放了最小测试与容器入口。
+
+测试样例位于：
+
+```text
+test/SymbolicDiff/cases/
+```
+
+当前已有两个标量函数样例：
+
+- `scalar-add-commutative`：`x + 1` vs `1 + x`，期望等价
+- `scalar-add-shift`：`x + 1` vs `x + 2`，期望 KLEE 找到反例
+
+本机没有 KLEE 时，也可以先检查 fixture 和 artifact 布局：
+
+```bash
+python3 scripts/mlse-diff-smoke.py
+```
+
+这会生成：
+
+```text
+artifacts/symbolic-diff-smoke/summary.json
+artifacts/symbolic-diff-smoke/<case>/old.go
+artifacts/symbolic-diff-smoke/<case>/new.go
+artifacts/symbolic-diff-smoke/<case>/case.json
+```
+
+如果当前环境里有 `clang` 和 `klee`，可以额外跑 KLEE 工具链 smoke：
+
+```bash
+python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
+```
+
+这条 smoke 会根据 `case.json` 里的 `c_model` 生成一个极小 C harness，编译成 LLVM bitcode，再交给 KLEE。它的作用是验证 KLEE / LLVM bitcode 工具链，不代表 Go/MLSE 的完整 symbolic diff 已经完成。
+
+### Docker 环境
+
+构建 symbolic diff 开发镜像：
+
+```bash
+scripts/docker-symbolic-diff-build.sh
+```
+
+进入镜像：
+
+```bash
+scripts/docker-symbolic-diff-run.sh
+```
+
+在镜像内可以运行：
+
+```bash
+scripts/build.sh
+scripts/build-mlir.sh
+python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
+```
+
+镜像默认使用 LLVM/MLIR `16` 并从源码构建 KLEE。这个选择是为了让 KLEE 与产生 bitcode 的 LLVM 工具版本保持一致；当前本机 Homebrew 默认脚本仍可用 LLVM `20`。如果后续要改 LLVM 版本，需要同时确认 MLSE 的 MLIR C++ API、`mlir-go` 绑定和 KLEE 支持范围。
+
+### GitHub Actions
+
+仓库现在新增了：
+
+```text
+.github/workflows/symbolic-diff.yml
+```
+
+这条 workflow 会在 GitHub runner 上跑三层检查：
+
+- `go-smoke`：`go test ./cmd/... ./internal/...`、Python 脚本语法检查、`python3 scripts/mlse-diff-smoke.py`
+- `dockerfile-check`：`docker build --check -f docker/Dockerfile.symbolic-diff .`
+- `docker-symbolic-diff`：用 GitHub Actions cache 构建 `docker/Dockerfile.symbolic-diff`，再在容器内运行 `scripts/build.sh`、`scripts/build-mlir.sh` 和 `python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke`
+
+也就是说，后续 KLEE / LLVM / MLIR 的完整环境验证会交给 GitHub CI 资源运行；本机开发只需要在必要时手动构建镜像。
+
 ## 目录约定
 
 当前仓库把实验和临时文件约束在仓库目录内，并区分**瞬时目录**与**可提交目录**：
@@ -236,6 +317,7 @@ tmp/cmake-mlir-build/tools/mlse-run/mlse-run path/to/05-llvm-dialect.mlir
 - `artifacts/`：构建与实验输出，属于瞬时目录，默认不入库
 - `tmp/`：临时工作目录和缓存，属于瞬时目录，默认不入库
 - `docker/`：容器相关定义
+- `test/SymbolicDiff/`：函数级 symbolic diff 的 repo-owned fixture
 - `testdata/`：golden / fixture / 可持久化保存的实验样本
 
 不要把临时实验文件散落到仓库外部。

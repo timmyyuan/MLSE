@@ -1,0 +1,28 @@
+{
+  "name": "scalar-add-commutative",
+  "description": "Equivalent scalar rewrite: x + 1 vs 1 + x.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "inputs": [
+    {
+      "name": "x",
+      "type": "int"
+    }
+  ],
+  "results": [
+    {
+      "type": "int"
+    }
+  ],
+  "c_model": {
+    "return_type": "long",
+    "params": [
+      {
+        "name": "x",
+        "ctype": "long"
+      }
+    ],
+    "old_return": "x + 1",
+    "new_return": "1 + x"
+  }
+}
