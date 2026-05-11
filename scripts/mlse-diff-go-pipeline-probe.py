@@ -35,7 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mlir-opt-bin", default="")
     parser.add_argument("--mlir-translate-bin", default="")
     parser.add_argument("--llvm-as-bin", default="")
+    parser.add_argument("--llvm-link-bin", default="")
+    parser.add_argument("--clang-bin", default="")
+    parser.add_argument("--klee-bin", default="")
+    parser.add_argument("--run-klee", action="store_true")
     parser.add_argument("--expect-blocker", default="")
+    parser.add_argument("--expect-status", default="")
     return parser.parse_args()
 
 
@@ -135,6 +140,136 @@ def run_stage(
     return None
 
 
+def sanitize_symbol(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]", "_", text)
+
+
+def rename_llvm_symbol(llvm_ir: str, old_symbol: str, new_symbol: str) -> str:
+    return llvm_ir.replace(f'@"{old_symbol}"', f"@{new_symbol}").replace(
+        f"@{old_symbol}", f"@{new_symbol}"
+    )
+
+
+def c_param_decl(params: list[dict[str, Any]]) -> str:
+    return ", ".join(f"{item['ctype']} {item['name']}" for item in params) or "void"
+
+
+def c_param_names(params: list[dict[str, Any]]) -> str:
+    return ", ".join(item["name"] for item in params)
+
+
+def build_klee_harness(metadata: dict[str, Any], old_symbol: str, new_symbol: str) -> str:
+    model = metadata["c_model"]
+    params = model["params"]
+    ret = model["return_type"]
+    decl = c_param_decl(params)
+    names = c_param_names(params)
+    declarations = "\n".join(f"  {item['ctype']} {item['name']} = 0;" for item in params)
+    symbolic = "\n".join(
+        f'  klee_make_symbolic(&{item["name"]}, sizeof({item["name"]}), "{item["name"]}");'
+        for item in params
+    )
+    return f"""extern void klee_make_symbolic(void *addr, unsigned long nbytes, const char *name);
+extern void klee_assert(int condition);
+
+extern {ret} {old_symbol}({decl});
+extern {ret} {new_symbol}({decl});
+
+int main(void) {{
+{declarations}
+{symbolic}
+  klee_assert({old_symbol}({names}) == {new_symbol}({names}));
+  return 0;
+}}
+"""
+
+
+def classify_klee_result(expected: str, klee_out: Path, proc: subprocess.CompletedProcess[str]) -> str:
+    assert_errors = list(klee_out.glob("*.assert.err"))
+    if expected == "counterexample" and assert_errors:
+        return "counterexample"
+    if expected == "equivalent" and not assert_errors and proc.returncode == 0:
+        return "equivalent"
+    return "inconclusive"
+
+
+def run_klee_diff(
+    metadata: dict[str, Any],
+    out_dir: Path,
+    tools: dict[str, str | None],
+) -> tuple[dict[str, Any], str | None]:
+    required = ["clang", "llvm_as", "llvm_link", "klee"]
+    missing = [name for name in required if not tools[name]]
+    record: dict[str, Any] = {"status": "not_run"}
+    if missing:
+        record["missing_tools"] = missing
+        return record, "klee_tool_unavailable"
+
+    old_symbol = "__mlse_old_" + sanitize_symbol(metadata["function"])
+    new_symbol = "__mlse_new_" + sanitize_symbol(metadata["function"])
+    record["old_symbol"] = old_symbol
+    record["new_symbol"] = new_symbol
+
+    renamed_bitcodes = []
+    for label, symbol in (("old", old_symbol), ("new", new_symbol)):
+        llvm_ir_path = out_dir / f"05-{label}.ll"
+        renamed_ll = out_dir / f"07-{label}.renamed.ll"
+        renamed_bc = out_dir / f"08-{label}.renamed.bc"
+        renamed_ll.write_text(
+            rename_llvm_symbol(llvm_ir_path.read_text(encoding="utf-8"), metadata["function"], symbol),
+            encoding="utf-8",
+        )
+        proc = run([tools["llvm_as"], str(renamed_ll), "-o", str(renamed_bc)])
+        write_stage(out_dir, f"rename_{label}_llvm_as", proc)
+        record[f"{label}_rename_llvm_as_returncode"] = proc.returncode
+        if proc.returncode != 0:
+            record["status"] = "blocked"
+            record["reason"] = extract_reason(proc)
+            return record, f"{label}_rename_llvm_as_failed"
+        renamed_bitcodes.append(renamed_bc)
+
+    harness_c = out_dir / "09-klee-harness.c"
+    harness_bc = out_dir / "10-klee-harness.bc"
+    linked_bc = out_dir / "11-linked.bc"
+    klee_out = out_dir / "klee-out"
+    harness_c.write_text(build_klee_harness(metadata, old_symbol, new_symbol), encoding="utf-8")
+
+    proc = run([tools["clang"], "-emit-llvm", "-g", "-O0", "-c", str(harness_c), "-o", str(harness_bc)])
+    write_stage(out_dir, "harness_clang", proc)
+    record["harness_clang_returncode"] = proc.returncode
+    if proc.returncode != 0:
+        record["status"] = "blocked"
+        record["reason"] = extract_reason(proc)
+        return record, "harness_clang_failed"
+
+    proc = run([tools["llvm_link"], str(harness_bc), *map(str, renamed_bitcodes), "-o", str(linked_bc)])
+    write_stage(out_dir, "llvm_link", proc)
+    record["llvm_link_returncode"] = proc.returncode
+    if proc.returncode != 0:
+        record["status"] = "blocked"
+        record["reason"] = extract_reason(proc)
+        return record, "llvm_link_failed"
+
+    shutil.rmtree(klee_out, ignore_errors=True)
+    proc = run([tools["klee"], "--output-dir", str(klee_out), str(linked_bc)])
+    write_stage(out_dir, "klee", proc)
+    actual = classify_klee_result(metadata["expected_status"], klee_out, proc)
+    record.update(
+        {
+            "status": actual,
+            "klee_returncode": proc.returncode,
+            "klee_output_dir": str(klee_out),
+            "linked_bitcode": str(linked_bc),
+        }
+    )
+    assert_errors = sorted(str(path) for path in klee_out.glob("*.assert.err"))
+    if assert_errors:
+        record["counterexample_errors"] = assert_errors
+    if actual != metadata["expected_status"]:
+        return record, "klee_result_mismatch"
+    return record, None
+
+
 def probe_side(
     label: str,
     source: Path,
@@ -226,14 +361,20 @@ def probe_case(case_dir: Path, emit_root: Path, tools: dict[str, str | None]) ->
         result["first_blocker"] = first_blocker
         return result
 
-    result["status"] = "blocked"
-    result["first_blocker"] = "same_input_klee_harness_missing"
-    result["missing_work"] = [
-        "construct old/new same-input harness from MLSE-produced bitcode",
-        "rename or namespace old/new functions without changing unresolved Go dialect",
-        "link harness bitcode with old/new bitcode for KLEE",
-        "classify KLEE assertion failures into equivalent/counterexample/inconclusive",
-    ]
+    if not tools["run_klee"]:
+        result["status"] = "blocked"
+        result["first_blocker"] = "klee_run_not_requested"
+        result["missing_work"] = ["rerun with --run-klee to execute the linked same-input harness"]
+        return result
+
+    klee_record, blocker = run_klee_diff(metadata, out_dir, tools)
+    result["klee_diff"] = klee_record
+    if blocker:
+        result["status"] = "blocked"
+        result["first_blocker"] = blocker
+        return result
+
+    result["status"] = klee_record["status"]
     return result
 
 
@@ -249,21 +390,37 @@ def main() -> int:
         "mlir_opt": discover(args.mlir_opt_bin, ["mlir-opt"]),
         "mlir_translate": discover(args.mlir_translate_bin, ["mlir-translate"]),
         "llvm_as": discover(args.llvm_as_bin, ["llvm-as-16", "llvm-as"]),
-        "klee": discover("", ["klee"]),
+        "llvm_link": discover(args.llvm_link_bin, ["llvm-link-16", "llvm-link"]),
+        "clang": discover(args.clang_bin, ["clang-16", "clang"]),
+        "klee": discover(args.klee_bin, ["klee"]),
+        "run_klee": args.run_klee,
     }
     cases = collect_case_dirs(resolve_path(args.cases_root), args.case)
     results = [probe_case(case_dir, emit_root, tools) for case_dir in cases]
     blockers = sorted({item["first_blocker"] for item in results if item.get("first_blocker")})
+    failures = [
+        item["case"]
+        for item in results
+        if not item.get("first_blocker") and item["status"] != item["expected_status"]
+    ]
+    status = "ok"
+    if blockers:
+        status = "blocked"
+    elif failures:
+        status = "failure"
     summary = {
-        "status": "blocked" if blockers else "ready",
+        "status": status,
         "elapsed_seconds": round(time.time() - started, 3),
         "tools": tools,
         "first_blockers": blockers,
+        "failures": failures,
         "results": results,
     }
     write_json(emit_root / "summary.json", summary)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     if args.expect_blocker and blockers != [args.expect_blocker]:
+        return 1
+    if args.expect_status and summary["status"] != args.expect_status:
         return 1
     return 0
 

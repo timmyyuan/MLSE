@@ -93,4 +93,4 @@ jobs:
             -v "$PWD:/workspace" \
             -w /workspace \
             mlse-symbolic-diff:ci \
-            bash -c 'scripts/build.sh && scripts/build-mlir.sh && python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke && python3 scripts/mlse-diff-go-pipeline-probe.py --expect-blocker same_input_klee_harness_missing'
+            bash -c 'scripts/build.sh && scripts/build-mlir.sh && python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke && python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok'
