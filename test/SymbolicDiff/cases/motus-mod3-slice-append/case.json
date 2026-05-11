@@ -1,0 +1,35 @@
+{
+  "name": "motus-mod3-slice-append",
+  "description": "Equivalent Motus smtcmp mod3-style slice append: append nil with pl[0].",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "inputs": [
+    {
+      "name": "pl",
+      "type": "[]int"
+    }
+  ],
+  "results": [
+    {
+      "type": "[]int"
+    }
+  ],
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod3"
+  },
+  "klee_model": {
+    "abi": "slice_i64",
+    "params": [
+      {
+        "name": "pl",
+        "type": "slice_i64",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "slice_i64",
+      "compare": "logical"
+    }
+  }
+}

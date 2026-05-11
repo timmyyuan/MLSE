@@ -197,6 +197,9 @@ def prepare_case(case_dir: Path, emit_root: Path, run_klee: bool, tools: dict[st
     if not tools["klee"]:
         result.update({"status": "inconclusive", "reason": "klee_not_found"})
         return result
+    if "c_model" not in metadata:
+        result.update({"status": "skipped", "reason": "c_model_not_available"})
+        return result
     smoke = run_klee_smoke(metadata, out_dir, tools["clang"], tools["klee"])
     result.update(smoke)
     return result

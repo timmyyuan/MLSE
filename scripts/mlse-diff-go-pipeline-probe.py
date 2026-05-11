@@ -158,7 +158,7 @@ def c_param_names(params: list[dict[str, Any]]) -> str:
     return ", ".join(item["name"] for item in params)
 
 
-def build_klee_harness(metadata: dict[str, Any], old_symbol: str, new_symbol: str) -> str:
+def build_scalar_klee_harness(metadata: dict[str, Any], old_symbol: str, new_symbol: str) -> str:
     model = metadata["c_model"]
     params = model["params"]
     ret = model["return_type"]
@@ -186,6 +186,110 @@ int main(void) {{
   return 0;
 }}
 """
+
+
+def build_slice_i64_klee_harness(metadata: dict[str, Any], old_symbol: str, new_symbol: str) -> str:
+    model = metadata["klee_model"]
+    params = model["params"]
+    if len(params) != 1 or params[0]["type"] != "slice_i64":
+        raise ValueError("slice_i64 KLEE model currently supports exactly one slice_i64 parameter")
+    name = params[0]["name"]
+    length = int(params[0].get("length", 1))
+    if length <= 0:
+        raise ValueError("slice_i64 KLEE model requires a positive concrete input length")
+    bytes_len = length * 8
+    symbolic_name = f"{name}_data"
+    symbolic_name_len = len(symbolic_name) + 1
+    return f"""@.name_{name} = private unnamed_addr constant [{symbolic_name_len} x i8] c"{symbolic_name}\\00"
+@.file = private unnamed_addr constant [5 x i8] c"mlse\\00"
+@.mismatch = private unnamed_addr constant [9 x i8] c"mismatch\\00"
+@.panic = private unnamed_addr constant [6 x i8] c"panic\\00"
+@.assert_suffix = private unnamed_addr constant [11 x i8] c"assert.err\\00"
+@.panic_suffix = private unnamed_addr constant [10 x i8] c"panic.err\\00"
+
+declare void @klee_make_symbolic(ptr, i64, ptr)
+declare void @klee_report_error(ptr, i32, ptr, ptr)
+declare ptr @malloc(i64)
+declare {{ ptr, i64, i64 }} @{old_symbol}({{ ptr, i64, i64 }})
+declare {{ ptr, i64, i64 }} @{new_symbol}({{ ptr, i64, i64 }})
+
+define void @runtime.panic.index(i64 %index, i64 %len) {{
+entry:
+  call void @klee_report_error(ptr @.file, i32 1, ptr @.panic, ptr @.panic_suffix)
+  unreachable
+}}
+
+define {{ ptr, i64, i64 }} @runtime.growslice(ptr %data, i64 %new_len, i64 %old_cap, i64 %count, i64 %elem_size) {{
+entry:
+  %bytes = mul i64 %new_len, %elem_size
+  %buf = call ptr @malloc(i64 %bytes)
+  %slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %buf, 0
+  %slice1 = insertvalue {{ ptr, i64, i64 }} %slice0, i64 %new_len, 1
+  %slice2 = insertvalue {{ ptr, i64, i64 }} %slice1, i64 %new_len, 2
+  ret {{ ptr, i64, i64 }} %slice2
+}}
+
+define i1 @__mlse_slice_i64_equal({{ ptr, i64, i64 }} %a, {{ ptr, i64, i64 }} %b) {{
+entry:
+  %alen = extractvalue {{ ptr, i64, i64 }} %a, 1
+  %blen = extractvalue {{ ptr, i64, i64 }} %b, 1
+  %same_len = icmp eq i64 %alen, %blen
+  br i1 %same_len, label %loop, label %not_equal
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %done = icmp eq i64 %i, %alen
+  br i1 %done, label %equal, label %body
+
+body:
+  %adata = extractvalue {{ ptr, i64, i64 }} %a, 0
+  %bdata = extractvalue {{ ptr, i64, i64 }} %b, 0
+  %aptr = getelementptr i64, ptr %adata, i64 %i
+  %bptr = getelementptr i64, ptr %bdata, i64 %i
+  %aval = load i64, ptr %aptr, align 8
+  %bval = load i64, ptr %bptr, align 8
+  %same_value = icmp eq i64 %aval, %bval
+  br i1 %same_value, label %continue, label %not_equal
+
+continue:
+  %next = add i64 %i, 1
+  br label %loop
+
+equal:
+  ret i1 true
+
+not_equal:
+  ret i1 false
+}}
+
+define i32 @main() {{
+entry:
+  %{name}_data = alloca [{length} x i64], align 8
+  %{name}_ptr = getelementptr [{length} x i64], ptr %{name}_data, i64 0, i64 0
+  call void @klee_make_symbolic(ptr %{name}_ptr, i64 {bytes_len}, ptr @.name_{name})
+  %{name}_slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %{name}_ptr, 0
+  %{name}_slice1 = insertvalue {{ ptr, i64, i64 }} %{name}_slice0, i64 {length}, 1
+  %{name}_slice2 = insertvalue {{ ptr, i64, i64 }} %{name}_slice1, i64 {length}, 2
+  %old_result = call {{ ptr, i64, i64 }} @{old_symbol}({{ ptr, i64, i64 }} %{name}_slice2)
+  %new_result = call {{ ptr, i64, i64 }} @{new_symbol}({{ ptr, i64, i64 }} %{name}_slice2)
+  %same = call i1 @__mlse_slice_i64_equal({{ ptr, i64, i64 }} %old_result, {{ ptr, i64, i64 }} %new_result)
+  br i1 %same, label %ok, label %mismatch
+
+mismatch:
+  call void @klee_report_error(ptr @.file, i32 2, ptr @.mismatch, ptr @.assert_suffix)
+  unreachable
+
+ok:
+  ret i32 0
+}}
+"""
+
+
+def build_klee_harness(metadata: dict[str, Any], old_symbol: str, new_symbol: str) -> tuple[str, str]:
+    model = metadata.get("klee_model", {})
+    if model.get("abi") == "slice_i64":
+        return "llvm_ir", build_slice_i64_klee_harness(metadata, old_symbol, new_symbol)
+    return "c", build_scalar_klee_harness(metadata, old_symbol, new_symbol)
 
 
 def classify_klee_result(expected: str, klee_out: Path, proc: subprocess.CompletedProcess[str]) -> str:
@@ -233,19 +337,27 @@ def run_klee_diff(
             return record, f"{label}_rename_llvm_as_failed"
         renamed_bitcodes.append(renamed_bc)
 
-    harness_c = out_dir / "09-klee-harness.c"
     harness_bc = out_dir / "10-klee-harness.bc"
     linked_bc = out_dir / "11-linked.bc"
     klee_out = out_dir / "klee-out"
-    harness_c.write_text(build_klee_harness(metadata, old_symbol, new_symbol), encoding="utf-8")
-
-    proc = run([tools["clang"], "-emit-llvm", "-g", "-O0", "-c", str(harness_c), "-o", str(harness_bc)])
-    write_stage(out_dir, "harness_clang", proc)
-    record["harness_clang_returncode"] = proc.returncode
+    harness_kind, harness_text = build_klee_harness(metadata, old_symbol, new_symbol)
+    if harness_kind == "llvm_ir":
+        harness_source = out_dir / "09-klee-harness.ll"
+        harness_source.write_text(harness_text, encoding="utf-8")
+        proc = run([tools["llvm_as"], str(harness_source), "-o", str(harness_bc)])
+        stage = "harness_llvm_as"
+    else:
+        harness_source = out_dir / "09-klee-harness.c"
+        harness_source.write_text(harness_text, encoding="utf-8")
+        proc = run([tools["clang"], "-emit-llvm", "-g", "-O0", "-c", str(harness_source), "-o", str(harness_bc)])
+        stage = "harness_clang"
+    write_stage(out_dir, stage, proc)
+    record["harness_kind"] = harness_kind
+    record[f"{stage}_returncode"] = proc.returncode
     if proc.returncode != 0:
         record["status"] = "blocked"
         record["reason"] = extract_reason(proc)
-        return record, "harness_clang_failed"
+        return record, f"{stage}_failed"
 
     proc = run([tools["llvm_link"], str(harness_bc), *map(str, renamed_bitcodes), "-o", str(linked_bc)])
     write_stage(out_dir, "llvm_link", proc)

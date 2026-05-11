@@ -242,10 +242,11 @@ tmp/cmake-mlir-build/tools/mlse-run/mlse-run path/to/05-llvm-dialect.mlir
 test/SymbolicDiff/cases/
 ```
 
-当前已有两个标量函数样例：
+当前已有这些函数级样例：
 
 - `scalar-add-commutative`：`x + 1` vs `1 + x`，期望等价
 - `scalar-add-shift`：`x + 1` vs `x + 2`，期望 KLEE 找到反例
+- `motus-mod3-slice-append`：从 Motus `smtcmp/testdata/mod3` 抽出的 `append(res, pl[0])` slice 等价样例，当前 KLEE harness 固定输入 slice 长度为 `1`，比较返回 slice 的长度和元素值
 
 本机没有 KLEE 时，也可以先检查 fixture 和 artifact 布局：
 
@@ -268,7 +269,7 @@ artifacts/symbolic-diff-smoke/<case>/case.json
 python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
 ```
 
-这条 smoke 会根据 `case.json` 里的 `c_model` 生成一个极小 C harness，编译成 LLVM bitcode，再交给 KLEE；mismatch 路径通过 `klee_report_error(..., "assert.err")` 产生反例文件。带 `--run-klee-toolchain-smoke` 时，如果结果是 `inconclusive`，脚本会返回失败。它的作用是验证 KLEE / LLVM bitcode 工具链，不代表 Go/MLSE 的完整 symbolic diff 已经完成。
+这条 smoke 会根据 `case.json` 里的 `c_model` 生成一个极小 C harness，编译成 LLVM bitcode，再交给 KLEE；mismatch 路径通过 `klee_report_error(..., "assert.err")` 产生反例文件。带 `--run-klee-toolchain-smoke` 时，如果结果是 `inconclusive`，脚本会返回失败。没有 `c_model` 的 case 会跳过这层 C-only smoke。它的作用是验证 KLEE / LLVM bitcode 工具链，不代表 Go/MLSE 的完整 symbolic diff 已经完成。
 
 如果要确认真正 Go 链路当前卡在哪，可以运行：
 
@@ -284,7 +285,7 @@ python3 scripts/mlse-diff-go-pipeline-probe.py
 python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok
 ```
 
-这条命令会为当前 repo-owned 标量样例生成 same-input KLEE harness，重命名并链接 old/new bitcode，再检查等价样例无 KLEE `.err` 文件、非等价样例能通过 `assert.err` 产生 counterexample。
+这条命令会为当前 repo-owned 样例生成 same-input KLEE harness，重命名并链接 old/new bitcode，再检查等价样例无 KLEE `.err` 文件、非等价样例能通过 `assert.err` 产生 counterexample。当前 slice harness 只覆盖 `[]int` 的最小 ABI：输入 slice 使用一个 symbolic `i64` 元素，runtime 只建模 `runtime.growslice` 和 `runtime.panic.index` 的测试所需行为。
 
 ### Docker 环境
 
