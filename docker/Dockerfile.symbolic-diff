@@ -13,7 +13,7 @@ ENV MLIR_DIR=/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/mlir
 ENV LLVM_DIR=/usr/lib/llvm-${LLVM_VERSION}/lib/cmake/llvm
 ENV CMAKE_C_COMPILER=/usr/lib/llvm-${LLVM_VERSION}/bin/clang
 ENV CMAKE_CXX_COMPILER=/usr/lib/llvm-${LLVM_VERSION}/bin/clang++
-ENV PATH=/usr/lib/llvm-${LLVM_VERSION}/bin:/opt/klee-build/bin:${PATH}
+ENV PATH=/usr/lib/llvm-${LLVM_VERSION}/bin:/opt/klee-build/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
