@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod38-format1-format2",
+  "description": "Motus smtcmp mod38: Format1 vs Format2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod38",
+    "old_function": "Format1",
+    "new_function": "Format2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

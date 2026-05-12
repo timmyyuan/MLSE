@@ -27,6 +27,16 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 - `scripts/test-all.sh`：运行仓库当前的统一测试入口，覆盖 Go、linters 和 repo-owned MLIR bridge 样例
 - `scripts/build-mlir.sh`：配置并构建最小 `mlse-opt` / `mlse-run`
 - `scripts/lint.sh`：运行仓库当前的 Go/C++/Python 规范检查入口
+- `.github/workflows/symbolic-diff.yml`：在 GitHub Actions 上跑 Go/smoke、Dockerfile 检查和 Docker/KLEE symbolic-diff smoke
+
+函数级 symbolic diff 方向已经新增早期准备入口：
+
+- `test/SymbolicDiff/cases/`：old/new 函数级等价测试样例
+- `scripts/mlse-diff-smoke.py`：fixture 与 KLEE 工具链 smoke 入口
+- `scripts/mlse-diff-fuzz-smoke.py`：coverage-guided concrete same-input diff smoke，用于早期发现反例但不作为等价证明
+- `docker/Dockerfile.symbolic-diff`：面向后续 KLEE vertical slice 的容器环境
+
+这部分当前用于搭建 #9 的测试与运行环境，还不是完整的函数等价证明链路。
 
 ## Agent 约定
 

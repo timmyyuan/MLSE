@@ -1,0 +1,115 @@
+name: symbolic-diff
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: symbolic-diff-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-smoke:
+    name: Go and symbolic-diff smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run Go tests
+        run: go test ./cmd/... ./internal/...
+
+      - name: Compile Python scripts
+        run: |
+          python3 -m py_compile \
+            scripts/mlse-diff-smoke.py \
+            scripts/mlse-diff-go-pipeline-probe.py \
+            scripts/mlse-diff-fuzz-smoke.py \
+            scripts/go-exec-diff-suite.py \
+            scripts/go-gobench-mlir-suite.py
+
+      - name: Prepare symbolic-diff fixtures
+        run: python3 scripts/mlse-diff-smoke.py
+
+      - name: Run concrete fuzz diff smoke
+        run: |
+          python3 scripts/mlse-diff-fuzz-smoke.py \
+            --case scalar-add-commutative \
+            --case scalar-add-shift \
+            --case motus-mod10-foo1-foo2 \
+            --case motus-mod11-normnil1-normnil2 \
+            --case motus-mod14-foo1-foo2 \
+            --case motus-mod16-foo1-foo2 \
+            --case motus-mod21-foo1-foo2 \
+            --case motus-mod22-foo1-foo2 \
+            --case motus-mod25-rollback1-rollback2 \
+            --case motus-mod36-pipegetresult1-pipegetresult2 \
+            --case motus-mod38-format1-format2 \
+            --case motus-mod39-foo-bar \
+            --iterations 4 \
+            --expect-status ok
+
+  dockerfile-check:
+    name: Dockerfile check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check symbolic-diff Dockerfile
+        run: docker build --check -f docker/Dockerfile.symbolic-diff .
+
+  docker-symbolic-diff:
+    name: Docker KLEE symbolic-diff smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build symbolic-diff image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.symbolic-diff
+          tags: mlse-symbolic-diff:ci
+          load: true
+          build-args: |
+            MLSE_LLVM_VERSION=20
+            KLEE_LLVM_VERSION=16
+            KLEE_REF=master
+          cache-from: type=gha,scope=mlse-symbolic-diff
+          cache-to: type=gha,mode=max,scope=mlse-symbolic-diff
+
+      - name: Run MLSE build and KLEE smoke in container
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            mlse-symbolic-diff:ci \
+            bash -c 'scripts/build.sh && scripts/build-mlir.sh && python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke && python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok'

@@ -1,0 +1,85 @@
+# syntax=docker/dockerfile:1
+
+ARG GO_IMAGE=golang:1.25-bookworm
+FROM ${GO_IMAGE}
+
+ARG LLVM_VERSION=20
+ARG MLSE_LLVM_VERSION=${LLVM_VERSION}
+ARG KLEE_LLVM_VERSION=16
+ARG KLEE_REF=master
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LLVM_VERSION=${MLSE_LLVM_VERSION}
+ENV MLSE_LLVM_VERSION=${MLSE_LLVM_VERSION}
+ENV KLEE_LLVM_VERSION=${KLEE_LLVM_VERSION}
+ENV LLVM_PREFIX=/usr/lib/llvm-${MLSE_LLVM_VERSION}
+ENV KLEE_LLVM_PREFIX=/usr/lib/llvm-${KLEE_LLVM_VERSION}
+ENV MLIR_DIR=/usr/lib/llvm-${MLSE_LLVM_VERSION}/lib/cmake/mlir
+ENV LLVM_DIR=/usr/lib/llvm-${MLSE_LLVM_VERSION}/lib/cmake/llvm
+ENV CMAKE_C_COMPILER=/usr/lib/llvm-${MLSE_LLVM_VERSION}/bin/clang
+ENV CMAKE_CXX_COMPILER=/usr/lib/llvm-${MLSE_LLVM_VERSION}/bin/clang++
+ENV GOFLAGS=-buildvcs=false
+ENV PATH=/usr/lib/llvm-${KLEE_LLVM_VERSION}/bin:/opt/klee-build/bin:/usr/lib/llvm-${MLSE_LLVM_VERSION}/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    cmake \
+    curl \
+    git \
+    gnupg \
+    lsb-release \
+    ninja-build \
+    pkg-config \
+    python3 \
+    python3-pip \
+    software-properties-common \
+    unzip \
+    wget \
+    zlib1g-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh \
+  && chmod +x /tmp/llvm.sh \
+  && /tmp/llvm.sh ${MLSE_LLVM_VERSION} \
+  && apt-get update && apt-get install -y --no-install-recommends \
+    clang-${KLEE_LLVM_VERSION} \
+    clang-${MLSE_LLVM_VERSION} \
+    lld-${KLEE_LLVM_VERSION} \
+    lld-${MLSE_LLVM_VERSION} \
+    libcap-dev \
+    libmlir-${MLSE_LLVM_VERSION}-dev \
+    libsqlite3-dev \
+    libz3-dev \
+    llvm-${KLEE_LLVM_VERSION} \
+    llvm-${KLEE_LLVM_VERSION}-dev \
+    llvm-${KLEE_LLVM_VERSION}-tools \
+    llvm-${MLSE_LLVM_VERSION} \
+    llvm-${MLSE_LLVM_VERSION}-dev \
+    llvm-${MLSE_LLVM_VERSION}-tools \
+    mlir-${MLSE_LLVM_VERSION}-tools \
+    z3 \
+  && rm -rf /var/lib/apt/lists/* /tmp/llvm.sh
+
+RUN git clone --depth 1 --branch ${KLEE_REF} https://github.com/klee/klee.git /opt/klee-src \
+  && cmake -S /opt/klee-src -B /opt/klee-build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=${KLEE_LLVM_PREFIX}/bin/clang \
+    -DCMAKE_CXX_COMPILER=${KLEE_LLVM_PREFIX}/bin/clang++ \
+    -DLLVM_DIR=${KLEE_LLVM_PREFIX}/lib/cmake/llvm \
+    -DLLVM_CONFIG_BINARY=${KLEE_LLVM_PREFIX}/bin/llvm-config \
+    -DLLVMCC=${KLEE_LLVM_PREFIX}/bin/clang \
+    -DLLVMCXX=${KLEE_LLVM_PREFIX}/bin/clang++ \
+    -DENABLE_SOLVER_Z3=ON \
+    -DENABLE_SOLVER_STP=OFF \
+    -DENABLE_POSIX_RUNTIME=OFF \
+    -DENABLE_UNIT_TESTS=OFF \
+    -DENABLE_SYSTEM_TESTS=OFF \
+    -DENABLE_TCMALLOC=OFF \
+  && cmake --build /opt/klee-build -j "$(nproc)"
+
+COPY docker/symbolic-diff-entrypoint.sh /usr/local/bin/mlse-symbolic-diff-entrypoint
+RUN chmod +x /usr/local/bin/mlse-symbolic-diff-entrypoint
+
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/mlse-symbolic-diff-entrypoint"]
+CMD ["bash"]

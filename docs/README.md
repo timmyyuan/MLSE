@@ -13,6 +13,10 @@
 - [execution.md](execution.md): 计划中的 `mlse-run` 执行层、共享执行内核、语言 runtime bundle 和差分测试策略。
 - [dev-setup.md](dev-setup.md): 当前可用脚本、目录约定以及 tinygo 实验入口。
 
+当前还新增了一组函数级 symbolic diff 的早期 smoke 入口，先记录在
+[dev-setup.md](dev-setup.md) 中。它用于为后续 KLEE / `mlir-go` 端到端链路准备
+fixture、Docker 工具链和 GitHub Actions CI，不代表函数等价 diff 已经完整落地。
+
 ## 建议后续补充的文档
 
 - `architecture.md`：系统结构、模块边界、关键依赖和数据流。

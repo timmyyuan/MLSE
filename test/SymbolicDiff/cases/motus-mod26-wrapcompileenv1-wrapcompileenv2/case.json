@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod26-wrapcompileenv1-wrapcompileenv2",
+  "description": "Motus smtcmp mod26: WrapCompileEnv1 vs WrapCompileEnv2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod26",
+    "old_function": "WrapCompileEnv1",
+    "new_function": "WrapCompileEnv2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

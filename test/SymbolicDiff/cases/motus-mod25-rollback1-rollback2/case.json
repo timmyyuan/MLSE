@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod25-rollback1-rollback2",
+  "description": "Motus smtcmp mod25: Rollback1 vs Rollback2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod25",
+    "old_function": "Rollback1",
+    "new_function": "Rollback2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

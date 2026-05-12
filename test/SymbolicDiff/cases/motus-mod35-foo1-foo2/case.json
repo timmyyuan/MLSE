@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod35-foo1-foo2",
+  "description": "Motus smtcmp mod35: Foo1 vs Foo2.",
+  "function": "diffcase.F",
+  "expected_status": "counterexample",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod35",
+    "old_function": "Foo1",
+    "new_function": "Foo2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod11-normnil1-normnil2",
+  "description": "Motus smtcmp mod11: NormNil1 vs NormNil2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod11",
+    "old_function": "NormNil1",
+    "new_function": "NormNil2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

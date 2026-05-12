@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod36-pipegetresult1-pipegetresult2",
+  "description": "Motus smtcmp mod36: PipeGetResult1 vs PipeGetResult2.",
+  "function": "diffcase.F",
+  "expected_status": "counterexample",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod36",
+    "old_function": "PipeGetResult1",
+    "new_function": "PipeGetResult2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

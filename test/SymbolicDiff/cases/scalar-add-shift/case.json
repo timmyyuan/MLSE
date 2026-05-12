@@ -1,0 +1,28 @@
+{
+  "name": "scalar-add-shift",
+  "description": "Non-equivalent scalar change: x + 1 vs x + 2.",
+  "function": "diffcase.F",
+  "expected_status": "counterexample",
+  "inputs": [
+    {
+      "name": "x",
+      "type": "int"
+    }
+  ],
+  "results": [
+    {
+      "type": "int"
+    }
+  ],
+  "c_model": {
+    "return_type": "long",
+    "params": [
+      {
+        "name": "x",
+        "ctype": "long"
+      }
+    ],
+    "old_return": "x + 1",
+    "new_return": "x + 2"
+  }
+}

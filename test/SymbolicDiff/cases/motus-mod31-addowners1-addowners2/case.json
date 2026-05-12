@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod31-addowners1-addowners2",
+  "description": "Motus smtcmp mod31: AddOwners1 vs AddOwners2.",
+  "function": "diffcase.F",
+  "expected_status": "counterexample",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod31",
+    "old_function": "AddOwners1",
+    "new_function": "AddOwners2"
+  },
+  "expected_blocker": "klee_model_unavailable"
+}

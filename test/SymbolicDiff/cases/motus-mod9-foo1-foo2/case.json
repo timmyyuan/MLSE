@@ -1,0 +1,27 @@
+{
+  "name": "motus-mod9-foo1-foo2",
+  "description": "Motus smtcmp mod9: foo1 vs foo2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod9",
+    "old_function": "foo1",
+    "new_function": "foo2"
+  },
+  "klee_model": {
+    "abi": "slice_i64",
+    "params": [
+      {
+        "name": "pl",
+        "type": "slice_i64",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "slice_i64",
+      "compare": "logical"
+    },
+    "notes": "Current smoke fixes []int input length to 1."
+  }
+}

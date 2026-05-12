@@ -1,0 +1,13 @@
+{
+  "name": "motus-mod37-getrankextend1-getrankextend2",
+  "description": "Motus smtcmp mod37: GetRankExtend1 vs GetRankExtend2.",
+  "function": "diffcase.F",
+  "expected_status": "equivalent",
+  "source": {
+    "repo": "motus",
+    "path": "pkg/analysis/ssa/smtcmp/testdata/mod37",
+    "old_function": "GetRankExtend1",
+    "new_function": "GetRankExtend2"
+  },
+  "expected_blocker": "old_mlse_opt_roundtrip_failed"
+}

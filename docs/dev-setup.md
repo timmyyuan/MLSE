@@ -23,6 +23,9 @@ MLSE 当前还处于早期原型阶段。
 - `scripts/clean.sh`：清理仓库内临时产物和 tinygo 实验目录
 - `scripts/go-gobench-mlir-suite.py`：对外部 `../gobench-eq` Go 样本跑 formal MLIR / `mlse-opt` round-trip / `mlse-opt --lower-go-bootstrap` / LLVM probe
 - `scripts/go-exec-diff-suite.py`：对 repo-owned `test/GoExec/cases/` 样例跑 native Go vs `mlse-run` 的 stdout / stderr 差分
+- `scripts/mlse-diff-smoke.py`：准备函数级 symbolic diff fixtures，并可在安装了 KLEE 的环境里跑最小 KLEE 工具链 smoke
+- `scripts/docker-symbolic-diff-build.sh`：构建 symbolic diff / KLEE 开发镜像
+- `scripts/docker-symbolic-diff-run.sh`：以当前仓库挂载方式进入 symbolic diff / KLEE 开发镜像
 
 ### 构建
 
@@ -229,6 +232,121 @@ tmp/cmake-mlir-build/tools/mlse-opt/mlse-opt --lower-go-bootstrap test/GoIR/ir/b
 tmp/cmake-mlir-build/tools/mlse-run/mlse-run path/to/05-llvm-dialect.mlir
 ```
 
+## 函数级 symbolic diff 早期环境
+
+仓库现在为后续“代码更改后函数是否等价”的 KLEE vertical slice 先放了最小测试与容器入口。
+
+测试样例位于：
+
+```text
+test/SymbolicDiff/cases/
+```
+
+当前已有这些函数级样例：
+
+- `scalar-add-commutative`：`x + 1` vs `1 + x`，期望等价
+- `scalar-add-shift`：`x + 1` vs `x + 2`，期望 KLEE 找到反例
+- `motus-mod3-slice-append`：从 Motus `smtcmp/testdata/mod3` 抽出的 `append(res, pl[0])` slice 等价样例，当前 KLEE harness 固定输入 slice 长度为 `1`，比较返回 slice 的长度和元素值
+- `motus-mod4` 到 `motus-mod39`：从 Motus `pkg/analysis/ssa/smtcmp/testdata/` 批量抽出的函数级 old/new fixture；其中 `mod4`、`mod5`、`mod6`、`mod7`、`mod9` 当前也会进入最小 `[]int` KLEE harness，其余 case 作为 expected blocker 进入 readiness matrix
+
+本机没有 KLEE 时，也可以先检查 fixture 和 artifact 布局：
+
+```bash
+python3 scripts/mlse-diff-smoke.py
+```
+
+这会生成：
+
+```text
+artifacts/symbolic-diff-smoke/summary.json
+artifacts/symbolic-diff-smoke/<case>/old.go
+artifacts/symbolic-diff-smoke/<case>/new.go
+artifacts/symbolic-diff-smoke/<case>/case.json
+```
+
+如果当前环境里有 `clang` 和 `klee`，可以额外跑 KLEE 工具链 smoke：
+
+```bash
+python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
+```
+
+这条 smoke 会根据 `case.json` 里的 `c_model` 生成一个极小 C harness，编译成 LLVM bitcode，再交给 KLEE；mismatch 路径通过 `klee_report_error(..., "assert.err")` 产生反例文件。带 `--run-klee-toolchain-smoke` 时，如果结果是 `inconclusive`，脚本会返回失败。没有 `c_model` 的 case 会跳过这层 C-only smoke。它的作用是验证 KLEE / LLVM bitcode 工具链，不代表 Go/MLSE 的完整 symbolic diff 已经完成。
+
+如果要确认真正 Go 链路当前卡在哪，可以运行：
+
+```bash
+python3 scripts/mlse-diff-go-pipeline-probe.py
+```
+
+这条探针会把 `old.go` / `new.go` 分别跑到 `mlse-go -> mlse-opt -> mlse-opt --lower-go-bootstrap -> mlir-opt -> mlir-translate -> llvm-as`，并在 `artifacts/symbolic-diff-go-pipeline-probe/summary.json` 里记录第一个阻塞点。不带 `--run-klee` 时，它只验证 old/new 两侧 Go 函数已经能产出 bitcode。
+
+如果想先用 concrete 输入快速探索 old/new 是否出现可观测差异，可以运行：
+
+```bash
+python3 scripts/mlse-diff-fuzz-smoke.py
+```
+
+这条入口会把每个 case 的 `old.go` / `new.go` 改写成两个临时 Go package，生成 same-input Go test harness，并逐 seed 运行 `go test -coverprofile`。每个 seed 都会比较 old/new 的返回值、panic、以及可观测入参变更；覆盖率有提升的 seed 会记录到 `selected_inputs`。输出状态包括：
+
+- `fuzz-counterexample`：某个 concrete seed 已经触发 old/new 可观测差异
+- `fuzz-no-diff-found`：当前 seed 集合没有发现差异；这不是等价证明
+- `skipped` / `blocked`：当前 fixture 缺外部包、签名不可从外部 harness 调用，或 harness 编译失败
+
+CI 里只跑一组稳定快路径，用来验证这层 concrete fuzz 链路能发现已知反例，并能给部分等价样例产出 coverage 报告。全量 case 可以本地按需扩大 `--iterations`；结果应作为 fuzz 信号，不应替代 KLEE / bounded exhaustive 的 `equivalent` 结论。
+
+在带 KLEE 的容器内可以运行完整标量 smoke：
+
+```bash
+python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok
+```
+
+这条命令会为当前 repo-owned 样例生成 same-input KLEE harness，重命名并链接 old/new bitcode，再检查等价样例无 KLEE `.err` 文件、非等价样例能通过 `assert.err` 产生 counterexample。当前 slice harness 只覆盖 `[]int` 的最小 ABI：输入 slice 使用一个 symbolic `i64` 元素，runtime 只建模 `runtime.growslice`、`runtime.makeslice` 和 `runtime.panic.index` 的测试所需行为。
+
+Motus 批量样例里暂未进入 KLEE 的 case 会在 `case.json` 中声明 `expected_blocker`。CI 会继续跑到真实阻塞点，并要求它和声明一致；这样可以把当前缺口固定下来，而不是把 unsupported 语义伪装成已证明等价。当前主要 blocker 是：
+
+- `klee_model_unavailable`：Go/MLIR/LLVM bitcode 已可达，但还缺对应参数 / 返回值 / runtime 的 KLEE model
+- `old_mlse_opt_roundtrip_failed`：frontend 产物尚不能通过 `mlse-opt` round-trip，常见于 `any`、复杂 aggregate、type assertion、variadic / helper 调用等边界
+
+### Docker 环境
+
+构建 symbolic diff 开发镜像：
+
+```bash
+scripts/docker-symbolic-diff-build.sh
+```
+
+进入镜像：
+
+```bash
+scripts/docker-symbolic-diff-run.sh
+```
+
+在镜像内可以运行：
+
+```bash
+scripts/build.sh
+scripts/build-mlir.sh
+python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke
+```
+
+镜像默认使用双 LLVM 工具链：MLSE / MLIR 构建使用 LLVM/MLIR `20`，KLEE 构建和 KLEE bitcode smoke 使用 LLVM `16`。这个选择是为了同时满足仓库当前 Go dialect 依赖的 MLIR C++ API、后续 `mlir-go` 绑定目标，以及 KLEE 当前更稳定的 LLVM 支持范围。如果后续要改 LLVM 版本，需要同时确认 MLSE 的 MLIR C++ API、`mlir-go` 绑定和 KLEE 支持范围。
+
+### GitHub Actions
+
+仓库现在新增了：
+
+```text
+.github/workflows/symbolic-diff.yml
+```
+
+这条 workflow 会在 GitHub runner 上跑三层检查：
+
+- `go-smoke`：`go test ./cmd/... ./internal/...`、Python 脚本语法检查、`python3 scripts/mlse-diff-smoke.py`，以及一组 concrete fuzz diff 快路径
+- `dockerfile-check`：`docker build --check -f docker/Dockerfile.symbolic-diff .`
+- `docker-symbolic-diff`：用 GitHub Actions cache 构建 `docker/Dockerfile.symbolic-diff`，再在容器内运行 `scripts/build.sh`、`scripts/build-mlir.sh`、`python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke` 和 `python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok`
+
+也就是说，后续 KLEE / LLVM / MLIR 的完整环境验证会交给 GitHub CI 资源运行；本机开发只需要在必要时手动构建镜像。
+
 ## 目录约定
 
 当前仓库把实验和临时文件约束在仓库目录内，并区分**瞬时目录**与**可提交目录**：
@@ -236,6 +354,7 @@ tmp/cmake-mlir-build/tools/mlse-run/mlse-run path/to/05-llvm-dialect.mlir
 - `artifacts/`：构建与实验输出，属于瞬时目录，默认不入库
 - `tmp/`：临时工作目录和缓存，属于瞬时目录，默认不入库
 - `docker/`：容器相关定义
+- `test/SymbolicDiff/`：函数级 symbolic diff 的 repo-owned fixture
 - `testdata/`：golden / fixture / 可持久化保存的实验样本
 
 不要把临时实验文件散落到仓库外部。
