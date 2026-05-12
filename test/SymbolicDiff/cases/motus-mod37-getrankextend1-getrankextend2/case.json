@@ -9,5 +9,5 @@
     "old_function": "GetRankExtend1",
     "new_function": "GetRankExtend2"
   },
-  "expected_blocker": "old_mlse_opt_roundtrip_failed"
+  "expected_blocker": "klee_model_unavailable"
 }

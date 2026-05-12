@@ -93,6 +93,10 @@ func emitFormalCoerceValue(value string, valueTy string, targetTy string, env *f
 	if valueTy == targetTy {
 		return value, targetTy, "", true
 	}
+	if isFormalAnyHandleType(targetTy) {
+		boxed, prelude, ok := emitFormalRuntimeBoxAny(value, valueTy, env)
+		return boxed, targetTy, prelude, ok
+	}
 	if isFormalIntegerType(valueTy) && isFormalIntegerType(targetTy) {
 		return emitFormalIntegerCast(value, valueTy, targetTy, env)
 	}
