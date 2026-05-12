@@ -43,6 +43,25 @@ class Seed:
     values: list[Any]
 
 
+@dataclass(frozen=True)
+class FuzzRunConfig:
+    emit_root: Path
+    work_root: Path
+    go_bin: str | None
+    iterations: int
+    seed: int
+
+
+@dataclass(frozen=True)
+class FailedSeedContext:
+    index: int
+    seed: Seed
+    executed: int
+    selected: list[int]
+    covered: set[str]
+    total: int
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run concrete same-input fuzz/diff smoke for SymbolicDiff cases."
@@ -552,7 +571,7 @@ def prepare_work_dir(case_dir: Path, work_dir: Path, sig: FuncSig, seeds: list[S
     (work_dir / "oldcase").mkdir(parents=True)
     (work_dir / "newcase").mkdir(parents=True)
     (work_dir / "harness").mkdir(parents=True)
-    (work_dir / "go.mod").write_text("module mlse_fuzz_case\n\ngo 1.25\n", encoding="utf-8")
+    (work_dir / "go.mod").write_text("module mlse_fuzz_case\n\ngo 1.22.0\n", encoding="utf-8")
     old_source = replace_package((case_dir / "old.go").read_text(encoding="utf-8"), "oldcase")
     new_source = replace_package((case_dir / "new.go").read_text(encoding="utf-8"), "newcase")
     (work_dir / "oldcase" / "old.go").write_text(old_source, encoding="utf-8")
@@ -560,23 +579,16 @@ def prepare_work_dir(case_dir: Path, work_dir: Path, sig: FuncSig, seeds: list[S
     (work_dir / "harness" / "harness_test.go").write_text(generate_harness(sig, seeds), encoding="utf-8")
 
 
-def run_case(
-    case_dir: Path,
-    emit_root: Path,
-    work_root: Path,
-    go_bin: str | None,
-    iterations: int,
-    seed: int,
-) -> dict[str, Any]:
+def run_case(case_dir: Path, config: FuzzRunConfig) -> dict[str, Any]:
     metadata = load_json(case_dir / "case.json")
-    out_dir = emit_root / metadata["name"]
-    work_dir = work_root / metadata["name"]
+    out_dir = config.emit_root / metadata["name"]
+    work_dir = config.work_root / metadata["name"]
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(case_dir / "case.json", out_dir / "case.json")
     shutil.copy2(case_dir / "old.go", out_dir / "old.go")
     shutil.copy2(case_dir / "new.go", out_dir / "new.go")
     result: dict[str, Any] = base_result(metadata, out_dir)
-    if not go_bin:
+    if not config.go_bin:
         result.update({"status": "skipped", "reason": "go_not_found"})
         return result
     try:
@@ -588,9 +600,9 @@ def run_case(
     if not ok:
         result.update({"status": "skipped", "reason": reason})
         return result
-    seeds = build_seeds(sig, iterations, seed)
+    seeds = build_seeds(sig, config.iterations, config.seed)
     prepare_work_dir(case_dir, work_dir, sig, seeds)
-    result.update(run_seed_loop(go_bin, work_dir, out_dir, seeds))
+    result.update(run_seed_loop(config.go_bin, work_dir, out_dir, seeds))
     result["expectation_met"] = expectation_met(metadata["expected_status"], result["status"])
     return result
 
@@ -625,7 +637,10 @@ def run_seed_loop(go_bin: str, work_dir: Path, out_dir: Path, seeds: list[Seed])
         executed += 1
         write_run_output(out_dir, index, proc)
         if proc.returncode != 0:
-            return classify_failed_seed(proc, index, seed, executed, selected, covered_union, total_blocks)
+            return classify_failed_seed(
+                proc,
+                FailedSeedContext(index, seed, executed, selected, covered_union, total_blocks),
+            )
         covered, total = parse_coverage(profile)
         total_blocks = max(total_blocks, total)
         if not covered.issubset(covered_union):
@@ -650,41 +665,33 @@ def write_run_output(out_dir: Path, index: int, proc: subprocess.CompletedProces
     (run_dir / f"seed-{index:03d}.stderr").write_text(proc.stderr, encoding="utf-8")
 
 
-def classify_failed_seed(
-    proc: subprocess.CompletedProcess[str],
-    index: int,
-    seed: Seed,
-    executed: int,
-    selected: list[int],
-    covered: set[str],
-    total: int,
-) -> dict[str, Any]:
+def classify_failed_seed(proc: subprocess.CompletedProcess[str], ctx: FailedSeedContext) -> dict[str, Any]:
     text = proc.stdout + proc.stderr
     if "no required module provides package" in text:
         return {
             "status": "skipped",
             "reason": "external_fixture_package_unavailable",
-            "generated_inputs": index + 1,
-            "executed_inputs": executed,
-            "failure_seed": {"seed_index": index, "label": seed.label},
+            "generated_inputs": ctx.index + 1,
+            "executed_inputs": ctx.executed,
+            "failure_seed": {"seed_index": ctx.index, "label": ctx.seed.label},
         }
     if "MLSE_FUZZ_MISMATCH" in text:
         return {
             "status": "fuzz-counterexample",
-            "generated_inputs": index + 1,
-            "executed_inputs": executed,
-            "selected_inputs": selected,
-            "coverage_blocks": len(covered),
-            "coverage_total_blocks": total,
-            "coverage_ratio": coverage_ratio(len(covered), total),
-            "counterexample": {"seed_index": index, "label": seed.label},
+            "generated_inputs": ctx.index + 1,
+            "executed_inputs": ctx.executed,
+            "selected_inputs": ctx.selected,
+            "coverage_blocks": len(ctx.covered),
+            "coverage_total_blocks": ctx.total,
+            "coverage_ratio": coverage_ratio(len(ctx.covered), ctx.total),
+            "counterexample": {"seed_index": ctx.index, "label": ctx.seed.label},
         }
     return {
         "status": "blocked",
         "reason": "go_fuzz_harness_failed",
-        "generated_inputs": index + 1,
-        "executed_inputs": executed,
-        "failure_seed": {"seed_index": index, "label": seed.label},
+        "generated_inputs": ctx.index + 1,
+        "executed_inputs": ctx.executed,
+        "failure_seed": {"seed_index": ctx.index, "label": ctx.seed.label},
     }
 
 
@@ -739,10 +746,8 @@ def main() -> int:
     work_root.mkdir(parents=True, exist_ok=True)
     go_bin = discover_go(args.go_bin)
     cases = collect_case_dirs(resolve_path(args.cases_root), args.case)
-    results = [
-        run_case(case_dir, emit_root, work_root, go_bin, args.iterations, args.seed)
-        for case_dir in cases
-    ]
+    config = FuzzRunConfig(emit_root, work_root, go_bin, args.iterations, args.seed)
+    results = [run_case(case_dir, config) for case_dir in cases]
     summary = summarize(results, started, {"go": go_bin})
     write_json(emit_root / "summary.json", summary)
     print(json.dumps(summary, indent=2, ensure_ascii=False))

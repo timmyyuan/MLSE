@@ -181,7 +181,9 @@ func emitFormalExpr(expr ast.Expr, hintedTy string, env *formalEnv) (string, str
 			return tmp, "i1", emitFormalLinef(e, env, "    %s = arith.constant %s", tmp, e.Name)
 		default:
 			if _, ok := env.locals[e.Name]; ok {
-				return env.use(e.Name), env.typeOf(e.Name), ""
+				value, ty := env.use(e.Name), env.typeOf(e.Name)
+				coercedValue, coercedTy, coercedPrelude := coerceFormalValueToHint(value, ty, hintedTy, env)
+				return coercedValue, coercedTy, coercedPrelude
 			}
 			if value, ty, prelude, ok := emitFormalTypedConstExpr(e, hintedTy, env); ok {
 				return value, ty, prelude
