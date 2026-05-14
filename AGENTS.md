@@ -2,6 +2,15 @@
 
 本仓库的代码实现与设计文档需要一起看。
 
+## 0. Changelog 工作状态锁
+
+开始任何分析或修改前，先读取 `changelog/status.md`。
+
+- 只有 `工作状态` 为 `空闲` 时，才能开始新的 agent 工作。
+- 开始工作时，先把 `changelog/status.md` 改为 `正在执行`，并填写当前 agent、工作范围、开始时间和关联记录。
+- `正在执行`、`验证中`、`等待用户` 都表示已有 agent 持有工作锁；除非用户明确要求接管，否则其它 agent 不应并行工作。
+- 结束工作前，把关联 entry 更新为最终状态，再把 `changelog/status.md` 改回 `空闲`。
+
 在开始写代码前，先阅读两类内容：
 
 1. 仓库内文档
@@ -11,10 +20,11 @@
 
 建议按下面顺序建立上下文：
 
-1. `README.md`
-2. `docs/spec.md`
-3. Obsidian vault `next` 中的 `mlse设计/00-MLSE设计文档.md`
-4. 本次修改直接相关的语言文档：
+1. `changelog/status.md`
+2. `README.md`
+3. `docs/spec.md`
+4. Obsidian vault `next` 中的 `mlse设计/00-MLSE设计文档.md`
+5. 本次修改直接相关的语言文档：
    - `mlse设计/01-PythonIR/`
    - `mlse设计/02-GoIR/`
 
@@ -37,7 +47,7 @@ find ~ -path '*/next/mlse设计/00-MLSE设计文档.md' 2>/dev/null | head -n 1
 - 如果改动改变了既有设计约束，代码完成后要同步更新 Obsidian 中的 `mlse设计`。
 - GoIR 到 LLVM 的链路禁止引入“兼容性桥接”式的绕过手段。不要通过额外文本重写、opaque-handle 替换或临时 helper 注入，把仍然含有 unresolved `go` dialect 语法的 MLIR 伪装成可继续下游的输入。
 - 允许进入 `MLIR -> LLVM IR` 流程的输入，必须是已经过 `mlse-opt` round-trip，且不再含有 unresolved `go` dialect 语法的 MLIR。换句话说，只允许真正的 `MLIR -> LLVM IR`，不允许用 compatibility lowering 之类的中间层掩盖前端或 dialect 尚未完成的语义。
-- Go frontend 的控制流 lowering 禁止使用 helper-based escape hatch。`if / for / range / branch` 这类结构要么下沉到标准控制流 dialect（如 `scf` / `cf` / `func`），要么显式保留为 `go.todo` / `go.todo_value`，不要把未完成的控制流语义伪装成 `func.call @__mlse_stmt_*` 之类的 extern helper。
+- Go frontend 的控制流 lowering 禁止使用 helper-based escape hatch。`if / for / range / branch` 这类结构要么下沉到标准控制流 dialect（如 `scf` / `cf` / `func`），要么显式保留为 `go.todo` / `go.todo_value`，不要把未完成的控制流语义伪装成任意 statement extern helper 调用。
 
 ## 4. 文档同步要求
 
@@ -53,7 +63,7 @@ find ~ -path '*/next/mlse设计/00-MLSE设计文档.md' 2>/dev/null | head -n 1
 
 除非用户明确要求只做分析或只改文档，默认按下面顺序工作：
 
-1. 先阅读 `AGENTS.md`、相关仓库文档，以及必要的 `mlse设计`。
+1. 先检查 `changelog/status.md`，再阅读 `AGENTS.md`、相关仓库文档，以及必要的 `mlse设计`。
 2. 先做局部、针对性的修改，不要一开始就大面积重构。
 3. 改完后先跑**与本次改动直接相关**的检查。
 

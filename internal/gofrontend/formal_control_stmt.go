@@ -130,26 +130,50 @@ func emitFormalIfStmt(s *ast.IfStmt, env *formalEnv) string {
 
 	thenEnv := env.clone()
 	thenText, thenTerm := emitFormalRegionBlock(s.Body.List, thenEnv)
-	if thenTerm {
-		syncFormalTempID(env, thenEnv)
-		return prelude + emitFormalLinef(s, env, "    go.todo %q", "IfStmt_returning_region")
-	}
 
 	elseEnv := env.clone()
 	elseText := ""
 	hasElse := false
 	if s.Else != nil {
-		elseBlock, ok := s.Else.(*ast.BlockStmt)
+		elseBlock, ok := formalElseBlock(s.Else)
 		if !ok {
 			return prelude + emitFormalLinef(s, env, "    go.todo %q", "IfStmt_else")
 		}
 		hasElse = true
 		var elseTerm bool
 		elseText, elseTerm = emitFormalRegionBlock(elseBlock.List, elseEnv)
-		if elseTerm {
+		if thenTerm || elseTerm {
+			ctx := formalSingleBranchTerminatingIfContext{
+				stmt:    s,
+				cond:    cond,
+				prelude: prelude,
+				then:    formalTerminatingIfBranch{text: thenText, term: thenTerm, branchEnv: thenEnv},
+				els:     formalTerminatingIfBranch{text: elseText, term: elseTerm, branchEnv: elseEnv},
+				env:     env,
+			}
+			if text, ok := emitFormalSingleBranchTerminatingIfStmt(ctx); ok {
+				syncFormalTempID(env, thenEnv, elseEnv)
+				return text
+			}
 			syncFormalTempID(env, thenEnv, elseEnv)
 			return prelude + emitFormalLinef(s, env, "    go.todo %q", "IfStmt_returning_region")
 		}
+	}
+	if thenTerm {
+		ctx := formalSingleBranchTerminatingIfContext{
+			stmt:    s,
+			cond:    cond,
+			prelude: prelude,
+			then:    formalTerminatingIfBranch{text: thenText, term: true, branchEnv: thenEnv},
+			els:     formalTerminatingIfBranch{text: elseText, term: false, branchEnv: elseEnv},
+			env:     env,
+		}
+		if text, ok := emitFormalSingleBranchTerminatingIfStmt(ctx); ok {
+			syncFormalTempID(env, thenEnv, elseEnv)
+			return text
+		}
+		syncFormalTempID(env, thenEnv)
+		return prelude + emitFormalLinef(s, env, "    go.todo %q", "IfStmt_returning_region")
 	}
 
 	mutated := formalMutatedOuterNames(env, thenEnv, elseEnv, hasElse)
@@ -241,6 +265,93 @@ func emitFormalIfStmt(s *ast.IfStmt, env *formalEnv) string {
 	}
 	syncFormalTempID(env, thenEnv, elseEnv)
 	return buf.String()
+}
+
+func formalElseBlock(node ast.Stmt) (*ast.BlockStmt, bool) {
+	switch elseNode := node.(type) {
+	case nil:
+		return nil, true
+	case *ast.BlockStmt:
+		return elseNode, true
+	case *ast.IfStmt:
+		return &ast.BlockStmt{List: []ast.Stmt{elseNode}}, true
+	default:
+		return nil, false
+	}
+}
+
+type formalTerminatingIfBranch struct {
+	text      string
+	term      bool
+	branchEnv *formalEnv
+}
+
+type formalSingleBranchTerminatingIfContext struct {
+	stmt    *ast.IfStmt
+	cond    string
+	prelude string
+	then    formalTerminatingIfBranch
+	els     formalTerminatingIfBranch
+	env     *formalEnv
+}
+
+func emitFormalSingleBranchTerminatingIfStmt(ctx formalSingleBranchTerminatingIfContext) (string, bool) {
+	switch {
+	case ctx.then.term && !ctx.els.term:
+		if formalStmtListContainsExplicitReturn(ctx.stmt.Body.List) {
+			return "", false
+		}
+		var ifBuf strings.Builder
+		ifBuf.WriteString(fmt.Sprintf("    scf.if %s {\n", ctx.cond))
+		ifBuf.WriteString(indentBlock(ctx.then.text, 2))
+		ifBuf.WriteString("    } else {\n")
+		ifBuf.WriteString(indentBlock(ctx.els.text, 2))
+		ifBuf.WriteString("    }\n")
+		propagateFormalOuterBindings(ctx.env, ctx.els.branchEnv)
+		return ctx.prelude + annotateFormalStructuredOp(ifBuf.String(), ctx.stmt, ctx.env), true
+	case !ctx.then.term && ctx.els.term:
+		if elseBlock, ok := formalElseBlock(ctx.stmt.Else); ok && formalStmtListContainsExplicitReturn(elseBlock.List) {
+			return "", false
+		}
+		var ifBuf strings.Builder
+		ifBuf.WriteString(fmt.Sprintf("    scf.if %s {\n", ctx.cond))
+		ifBuf.WriteString(indentBlock(ctx.then.text, 2))
+		ifBuf.WriteString("    } else {\n")
+		ifBuf.WriteString(indentBlock(ctx.els.text, 2))
+		ifBuf.WriteString("    }\n")
+		propagateFormalOuterBindings(ctx.env, ctx.then.branchEnv)
+		return ctx.prelude + annotateFormalStructuredOp(ifBuf.String(), ctx.stmt, ctx.env), true
+	default:
+		return "", false
+	}
+}
+
+func formalStmtListContainsExplicitReturn(stmts []ast.Stmt) bool {
+	for _, stmt := range stmts {
+		if formalStmtContainsExplicitReturn(stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func formalStmtContainsExplicitReturn(stmt ast.Stmt) bool {
+	found := false
+	ast.Inspect(stmt, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case nil:
+			return false
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			found = true
+			return false
+		default:
+			_ = node
+			return !found
+		}
+	})
+	return found
 }
 
 func emitFormalForStmt(s *ast.ForStmt, remaining []ast.Stmt, env *formalEnv) string {
@@ -660,7 +771,7 @@ func emitFormalRangeBindings(s *ast.RangeStmt, source string, sourceTy string, i
 		env.bindValue(keyName, boundIndex, keyTy)
 	}
 	if valueName := rangeKeyName(s.Value); valueName != "" {
-		valueTy := inferFormalRangeValueType(valueName, sourceTy, s.Body, env)
+		valueTy := inferFormalRangeValueType(s, valueName, sourceTy, s.Body, env)
 		indexArg := indexValue
 		if indexTy != "index" {
 			indexArg = ivSSA

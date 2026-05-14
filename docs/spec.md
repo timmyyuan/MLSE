@@ -447,6 +447,7 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 │   ├── architecture.md
 │   ├── execution.md
 │   └── dev-setup.md
+├── changelog/
 ├── docker/
 ├── cmake/
 ├── third_party/
@@ -485,6 +486,7 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 各层职责建议如下：
 
 - `docker/`：开发和 CI 的标准运行环境定义。
+- `changelog/`：仓库级变更、交接和当前 agent 工作状态目录。
 - `third_party/`：固定外部编译基础设施依赖，优先用于 `ClangIR/CIR` 集成。
 - `include/mlse/`：对外头文件和核心接口。
 - `include/mlse/Execution/`：共享执行层接口、值模型和 runtime 注册边界。
@@ -498,6 +500,17 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 - `tools/`：开发和调试工具。
 - `test/GoExec/`、`test/PythonExec/`：执行差分样例，关注 stdout / stderr 与 panic 行为。
 - `test/`：lit、FileCheck、单元测试和端到端样例。
+
+### 12.1 Changelog 与工作状态
+
+`changelog/` 是目录，不是单个根 `CHANGELOG.md` 文件。它采用渐进式披露：
+
+- `changelog/README.md`：说明目录规则和阅读顺序。
+- `changelog/status.md`：记录当前工作状态，是单 agent 工作锁。
+- `changelog/entries/`：保存按日期组织的详细变更记录。
+- `changelog/templates/`：保存后续记录模板。
+
+`changelog/status.md` 的 `工作状态` 为 `空闲` 时，新 agent 才能开始工作。开始后应先改为 `正在执行`；`正在执行`、`验证中`、`等待用户` 都表示已有 agent 占用工作锁。结束前必须把关联 entry 收尾，再把当前状态改回 `空闲`。
 
 ## 13. 编译驱动与工具规划
 

@@ -5,7 +5,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // CompileFile keeps the default entry aligned with the formal bridge.
@@ -64,7 +67,8 @@ func parseModuleFallback(path string) (*ast.File, []*ast.FuncDecl, *formalTypeCo
 	}
 
 	funcs := collectFormalFuncs(file)
-	return file, funcs, buildFormalTypeContext(path, fset, file), nil
+	packageFiles := collectFormalFallbackPackageFiles(path, fset, file)
+	return file, funcs, buildFormalTypeContextFromFiles(path, fset, file, packageFiles), nil
 }
 
 func collectFormalFuncs(file *ast.File) []*ast.FuncDecl {
@@ -75,6 +79,55 @@ func collectFormalFuncs(file *ast.File) []*ast.FuncDecl {
 			funcs = append(funcs, fn)
 		}
 	}
-	sort.Slice(funcs, func(i, j int) bool { return funcs[i].Name.Name < funcs[j].Name.Name })
+	sort.Slice(funcs, func(i, j int) bool {
+		if funcs[i].Name.Name == funcs[j].Name.Name {
+			return funcs[i].Pos() < funcs[j].Pos()
+		}
+		return funcs[i].Name.Name < funcs[j].Name.Name
+	})
 	return funcs
+}
+
+func collectFormalFallbackPackageFiles(path string, fset *token.FileSet, mainFile *ast.File) []*ast.File {
+	files := []*ast.File{mainFile}
+	if mainFile == nil || mainFile.Name == nil {
+		return files
+	}
+
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return files
+	}
+	mainAbs, err := filepath.Abs(path)
+	if err != nil {
+		mainAbs = filepath.Clean(path)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		candidateAbs, err := filepath.Abs(candidate)
+		if err != nil {
+			candidateAbs = filepath.Clean(candidate)
+		}
+		if sameFormalFilePath(candidateAbs, mainAbs) {
+			continue
+		}
+		peer, err := parser.ParseFile(fset, candidateAbs, nil, parser.ParseComments)
+		if err != nil || peer == nil || peer.Name == nil {
+			continue
+		}
+		if peer.Name.Name != mainFile.Name.Name {
+			continue
+		}
+		files = append(files, peer)
+	}
+	return files
 }

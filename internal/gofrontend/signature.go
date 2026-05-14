@@ -63,7 +63,11 @@ func formatFuncHeaderWithVisibilityAndAttrs(name string, params []string, result
 	case 0:
 		return fmt.Sprintf("  func.func %s@%s(%s)%s {\n", visibility, sanitizeName(name), strings.Join(params, ", "), attrText)
 	case 1:
-		return fmt.Sprintf("  func.func %s@%s(%s) -> %s%s {\n", visibility, sanitizeName(name), strings.Join(params, ", "), results[0], attrText)
+		result := results[0]
+		if isFormalFunctionType(result) {
+			result = "(" + result + ")"
+		}
+		return fmt.Sprintf("  func.func %s@%s(%s) -> %s%s {\n", visibility, sanitizeName(name), strings.Join(params, ", "), result, attrText)
 	default:
 		return fmt.Sprintf("  func.func %s@%s(%s) -> (%s)%s {\n", visibility, sanitizeName(name), strings.Join(params, ", "), strings.Join(results, ", "), attrText)
 	}
@@ -74,7 +78,11 @@ func formatFuncDecl(name string, params []string, results []string) string {
 	case 0:
 		return fmt.Sprintf("  func.func private @%s(%s)\n", sanitizeName(name), strings.Join(params, ", "))
 	case 1:
-		return fmt.Sprintf("  func.func private @%s(%s) -> %s\n", sanitizeName(name), strings.Join(params, ", "), results[0])
+		result := results[0]
+		if isFormalFunctionType(result) {
+			result = "(" + result + ")"
+		}
+		return fmt.Sprintf("  func.func private @%s(%s) -> %s\n", sanitizeName(name), strings.Join(params, ", "), result)
 	default:
 		return fmt.Sprintf("  func.func private @%s(%s) -> (%s)\n", sanitizeName(name), strings.Join(params, ", "), strings.Join(results, ", "))
 	}

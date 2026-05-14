@@ -10,13 +10,14 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 
 - 状态：初始化中，已落下第一条可运行的前端/执行闭环
 - 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP、正式 `go` dialect C++/TableGen 骨架，以及 LLVM-dialect MLIR 的 `mlse-run` MVP
-- 文档：已补充技术规划版 spec、docs 索引、Go 前端说明和正式 GoIR dialect bootstrap 说明
+- 文档：已补充技术规划版 spec、docs 索引、Go 前端说明、正式 GoIR dialect bootstrap 说明，以及 changelog 工作状态目录
 - 目标：继续收敛到真实 frontend / MLIR 管线，并把当前 formal bridge 扩展成可维护实现
 
 ## 文档入口
 
 - [仓库规格说明](docs/spec.md)
 - [文档索引](docs/README.md)
+- [变更记录与工作状态](changelog/README.md)
 - [开发环境说明](docs/dev-setup.md)
 - [Go 前端说明](docs/go-frontend.md)
 - [GoIR 方言 bootstrap 说明](docs/goir-dialect.md)
@@ -40,6 +41,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 
 ## Agent 约定
 
+- 后续 agent 开始工作前，先看 `changelog/status.md`。只有 `工作状态` 为 `空闲` 时，才能把它改为 `正在执行` 并继续。
 - 后续 agent 写代码前，先看仓库根目录的 `AGENTS.md`。
 - `AGENTS.md` 中说明了如何定位 Obsidian 里的 `mlse设计` 文档，以及哪些改动需要同步设计文档。
 
@@ -60,6 +62,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 ├── docs/
 │   ├── README.md
 │   └── spec.md
+├── changelog/
 ├── docker/
 ├── linters/
 ├── include/mlse/

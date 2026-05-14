@@ -402,7 +402,12 @@ func emitFormalUnaryExpr(expr *ast.UnaryExpr, hintedTy string, env *formalEnv) (
 	case token.NOT:
 		value, ty, prelude := emitFormalExpr(expr.X, "i1", env)
 		if ty != "i1" {
-			return emitFormalTodoValue("unary_not", normalizeFormalType(hintedTy), env)
+			coercedValue, coercedTy, coercedPrelude, ok := emitFormalCoerceValue(value, ty, "i1", env)
+			if !ok || coercedTy != "i1" {
+				return emitFormalTodoValue("unary_not", normalizeFormalType(hintedTy), env)
+			}
+			value = coercedValue
+			prelude += coercedPrelude
 		}
 		one := env.temp("const")
 		tmp := env.temp("not")

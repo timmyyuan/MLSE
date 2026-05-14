@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	goconstant "go/constant"
 	"go/importer"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
@@ -22,6 +23,7 @@ import (
 type formalTypeContext struct {
 	packagePath string
 	imports     map[string]string
+	imported    map[string]*formalImportedPackageInfo
 	goarch      string
 	sizes       types.Sizes
 	info        *types.Info
@@ -30,13 +32,23 @@ type formalTypeContext struct {
 	sourcePath  string
 }
 
+type formalImportedPackageInfo struct {
+	funcs  map[string]formalFuncSig
+	values map[string]string
+}
+
 const formalSourceDisplayPathEnv = "MLSE_SOURCE_DISPLAY_PATH"
 
 func buildFormalTypeContext(filePath string, fset *token.FileSet, file *ast.File) *formalTypeContext {
+	return buildFormalTypeContextFromFiles(filePath, fset, file, []*ast.File{file})
+}
+
+func buildFormalTypeContextFromFiles(filePath string, fset *token.FileSet, file *ast.File, files []*ast.File) *formalTypeContext {
 	goarch, _ := detectFormalTarget()
 	ctx := &formalTypeContext{
 		packagePath: discoverFormalPackagePath(filePath, file),
 		imports:     collectFormalImports(file),
+		imported:    collectFormalImportedPackages(filePath, file),
 		goarch:      goarch,
 		sizes:       buildFormalSizes(goarch),
 		fset:        fset,
@@ -45,6 +57,9 @@ func buildFormalTypeContext(filePath string, fset *token.FileSet, file *ast.File
 
 	if file == nil || fset == nil {
 		return ctx
+	}
+	if len(files) == 0 {
+		files = []*ast.File{file}
 	}
 
 	importers := []types.Importer{
@@ -60,7 +75,7 @@ func buildFormalTypeContext(filePath string, fset *token.FileSet, file *ast.File
 			FakeImportC:              true,
 			Sizes:                    ctx.sizes,
 		}
-		pkg, _ := cfg.Check(ctx.packagePath, fset, []*ast.File{file}, info)
+		pkg, _ := cfg.Check(ctx.packagePath, fset, files, info)
 		if pkg == nil {
 			continue
 		}
@@ -127,6 +142,7 @@ func loadFormalFileWithPackages(filePath string) (*ast.File, *formalTypeContext,
 			return file, &formalTypeContext{
 				packagePath: pkg.PkgPath,
 				imports:     collectFormalImports(file),
+				imported:    collectFormalImportedPackages(absPath, file),
 				goarch:      goarch,
 				sizes:       sizes,
 				info:        pkg.TypesInfo,
@@ -278,9 +294,196 @@ func readFormalModulePath(goModPath string) string {
 	return ""
 }
 
+func collectFormalImportedPackages(filePath string, file *ast.File) map[string]*formalImportedPackageInfo {
+	if file == nil {
+		return nil
+	}
+	imports := collectFormalImports(file)
+	if len(imports) == 0 {
+		return nil
+	}
+	out := make(map[string]*formalImportedPackageInfo)
+	for _, importPath := range imports {
+		if importPath == "" {
+			continue
+		}
+		dir, ok := resolveFormalImportDir(filePath, importPath)
+		if !ok {
+			continue
+		}
+		info, ok := loadFormalImportedPackageInfo(dir)
+		if !ok {
+			continue
+		}
+		out[importPath] = info
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func resolveFormalImportDir(filePath string, importPath string) (string, bool) {
+	if filePath == "" || importPath == "" {
+		return "", false
+	}
+	baseDir := filepath.Dir(filePath)
+	if moduleDir, modulePath := findFormalModuleRoot(baseDir); moduleDir != "" && modulePath != "" {
+		switch {
+		case importPath == modulePath:
+			if formalDirExists(moduleDir) {
+				return moduleDir, true
+			}
+		case strings.HasPrefix(importPath, modulePath+"/"):
+			rel := strings.TrimPrefix(importPath, modulePath+"/")
+			dir := filepath.Join(moduleDir, filepath.FromSlash(rel))
+			if formalDirExists(dir) {
+				return dir, true
+			}
+		}
+	}
+	if srcRoot, ok := formalSourceRoot(filePath); ok {
+		dir := filepath.Join(srcRoot, filepath.FromSlash(importPath))
+		if formalDirExists(dir) {
+			return dir, true
+		}
+	}
+	return "", false
+}
+
+func formalSourceRoot(filePath string) (string, bool) {
+	clean := filepath.Clean(filePath)
+	srcMarker := string(filepath.Separator) + "src" + string(filepath.Separator)
+	idx := strings.LastIndex(clean, srcMarker)
+	if idx < 0 {
+		return "", false
+	}
+	return clean[:idx+len(srcMarker)-1], true
+}
+
+func formalDirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func loadFormalImportedPackageInfo(dir string) (*formalImportedPackageInfo, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, false
+	}
+	fset := token.NewFileSet()
+	info := &formalImportedPackageInfo{
+		funcs:  make(map[string]formalFuncSig),
+		values: make(map[string]string),
+	}
+	pkgName := ""
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		filePath := filepath.Join(dir, name)
+		file, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+		if err != nil || file == nil || file.Name == nil {
+			continue
+		}
+		if pkgName == "" {
+			pkgName = file.Name.Name
+		}
+		if file.Name.Name != pkgName {
+			continue
+		}
+		for _, decl := range file.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Recv == nil && d.Name != nil {
+					info.funcs[d.Name.Name] = formalFuncSigFromDecl(d, nil)
+				}
+			case *ast.GenDecl:
+				if d.Tok != token.CONST && d.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range d.Specs {
+					valueSpec, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for i, name := range valueSpec.Names {
+						if name == nil || name.Name == "_" {
+							continue
+						}
+						ty := formalImportedValueSpecType(valueSpec, i)
+						if ty != "" {
+							info.values[name.Name] = ty
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(info.funcs) == 0 && len(info.values) == 0 {
+		return nil, false
+	}
+	return info, true
+}
+
+func formalImportedValueSpecType(spec *ast.ValueSpec, index int) string {
+	if spec == nil {
+		return ""
+	}
+	if spec.Type != nil {
+		return formalTypeExprToMLIR(spec.Type, nil)
+	}
+	if index >= 0 && index < len(spec.Values) {
+		return formalImportedExprLiteralType(spec.Values[index])
+	}
+	if len(spec.Values) == 1 {
+		return formalImportedExprLiteralType(spec.Values[0])
+	}
+	return ""
+}
+
+func formalImportedExprLiteralType(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		switch e.Kind {
+		case token.INT:
+			return formalTargetIntType(nil)
+		case token.FLOAT:
+			return "f64"
+		case token.STRING:
+			return "!go.string"
+		}
+	case *ast.Ident:
+		switch e.Name {
+		case "true", "false":
+			return "i1"
+		case "nil":
+			return "!go.error"
+		default:
+			if ty, ok := formalBuiltinType(e.Name); ok {
+				return ty
+			}
+			return formalOpaqueType(e.Name)
+		}
+	case *ast.SelectorExpr:
+		return goTypeToFormalMLIR(e)
+	case *ast.CallExpr:
+		if len(e.Args) == 1 && isFormalTypeExpr(e.Fun, nil) {
+			return formalTypeExprToMLIR(e.Fun, nil)
+		}
+	case *ast.UnaryExpr:
+		return formalImportedExprLiteralType(e.X)
+	}
+	return ""
+}
+
 func formalTypedExprType(expr ast.Expr, module *formalModuleContext) (string, bool) {
 	if expr == nil || module == nil || module.typed == nil || module.typed.info == nil {
-		return "", false
+		return formalImportedExprType(expr, module)
 	}
 	if tv, ok := module.typed.info.Types[expr]; ok && tv.Type != nil {
 		return goTypesTypeToFormalMLIR(tv.Type, module), true
@@ -298,7 +501,7 @@ func formalTypedExprType(expr ast.Expr, module *formalModuleContext) (string, bo
 			return goTypesTypeToFormalMLIR(obj.Type(), module), true
 		}
 	}
-	return "", false
+	return formalImportedExprType(expr, module)
 }
 
 func formalResolvedGoTypesType(expr ast.Expr, module *formalModuleContext) (types.Type, bool) {
@@ -581,7 +784,7 @@ func isFormalTypedInfoUsableType(ty string) bool {
 
 func formalTypedExprFuncSig(expr ast.Expr, module *formalModuleContext) (formalFuncSig, bool) {
 	if expr == nil || module == nil || module.typed == nil || module.typed.info == nil {
-		return formalFuncSig{}, false
+		return formalImportedExprFuncSig(expr, module)
 	}
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -599,7 +802,71 @@ func formalTypedExprFuncSig(expr ast.Expr, module *formalModuleContext) (formalF
 	if tv, ok := module.typed.info.Types[expr]; ok && tv.Type != nil {
 		return formalFuncSigFromGoTypes(tv.Type, module)
 	}
-	return formalFuncSig{}, false
+	return formalImportedExprFuncSig(expr, module)
+}
+
+func formalImportedExprType(expr ast.Expr, module *formalModuleContext) (string, bool) {
+	if expr == nil || module == nil || module.typed == nil {
+		return "", false
+	}
+	selector, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if sig, ok := formalImportedSelectorFuncSig(selector, module); ok {
+		return formatFormalFuncType(sig.params, sig.results), true
+	}
+	return formalImportedSelectorValueType(selector, module)
+}
+
+func formalImportedExprFuncSig(expr ast.Expr, module *formalModuleContext) (formalFuncSig, bool) {
+	selector, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return formalFuncSig{}, false
+	}
+	return formalImportedSelectorFuncSig(selector, module)
+}
+
+func formalImportedSelectorFuncSig(expr *ast.SelectorExpr, module *formalModuleContext) (formalFuncSig, bool) {
+	info, ok := formalImportedPackageInfoForSelector(expr, module)
+	if !ok || info == nil {
+		return formalFuncSig{}, false
+	}
+	sig, ok := info.funcs[expr.Sel.Name]
+	if !ok {
+		return formalFuncSig{}, false
+	}
+	return formalFuncSig{
+		params:  append([]string(nil), sig.params...),
+		results: append([]string(nil), sig.results...),
+	}, true
+}
+
+func formalImportedSelectorValueType(expr *ast.SelectorExpr, module *formalModuleContext) (string, bool) {
+	info, ok := formalImportedPackageInfoForSelector(expr, module)
+	if !ok || info == nil {
+		return "", false
+	}
+	ty, ok := info.values[expr.Sel.Name]
+	if !ok || ty == "" {
+		return "", false
+	}
+	return ty, true
+}
+
+func formalImportedPackageInfoForSelector(expr *ast.SelectorExpr, module *formalModuleContext) (*formalImportedPackageInfo, bool) {
+	if expr == nil || module == nil || module.typed == nil {
+		return nil, false
+	}
+	importPath := formalImportPathForSelector(expr, module)
+	if importPath == "" {
+		return nil, false
+	}
+	info, ok := module.typed.imported[importPath]
+	if !ok || info == nil {
+		return nil, false
+	}
+	return info, true
 }
 
 func formalFuncSigFromGoTypes(ty types.Type, module *formalModuleContext) (formalFuncSig, bool) {

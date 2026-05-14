@@ -9,41 +9,51 @@ import (
 
 // formalModuleContext stores module-level facts needed while printing one file.
 type formalModuleContext struct {
-	packageName   string
-	goarch        string
-	targetIntTy   string
-	targetIntBits int
-	typed         *formalTypeContext
-	definedFuncs  map[string]formalFuncSig
-	namedTypes    map[string]struct{}
-	externByKey   map[string]formalExternDecl
-	externOrder   []string
-	generated     []string
-	nextFuncLit   int
-	funcLitByKey  map[string]int
-	scopes        []formalScopeEntry
-	scopeByNode   map[ast.Node]int
-	parentByNode  map[ast.Node]ast.Node
+	packageName      string
+	goarch           string
+	targetIntTy      string
+	targetIntBits    int
+	typed            *formalTypeContext
+	definedFuncs     map[string]formalFuncSig
+	funcSymbolByDecl map[*ast.FuncDecl]string
+	namedTypes       map[string]struct{}
+	externByKey      map[string]formalExternDecl
+	externOrder      []string
+	generated        []string
+	nextFuncLit      int
+	funcLitByKey     map[string]int
+	scopes           []formalScopeEntry
+	scopeByNode      map[ast.Node]int
+	parentByNode     map[ast.Node]ast.Node
 }
 
 // newFormalModuleContext collects module-level declarations before function lowering starts.
 func newFormalModuleContext(file *ast.File, funcs []*ast.FuncDecl, typed *formalTypeContext) *formalModuleContext {
 	goarch, targetIntBits := detectFormalTarget()
 	module := &formalModuleContext{
-		packageName:   sanitizeName(formalPackageName(file)),
-		goarch:        goarch,
-		targetIntTy:   formalIntegerTypeForBits(targetIntBits),
-		targetIntBits: targetIntBits,
-		typed:         typed,
-		definedFuncs:  make(map[string]formalFuncSig, len(funcs)),
-		namedTypes:    make(map[string]struct{}),
-		externByKey:   make(map[string]formalExternDecl),
-		funcLitByKey:  make(map[string]int),
-		scopeByNode:   make(map[ast.Node]int),
-		parentByNode:  make(map[ast.Node]ast.Node),
+		packageName:      sanitizeName(formalPackageName(file)),
+		goarch:           goarch,
+		targetIntTy:      formalIntegerTypeForBits(targetIntBits),
+		targetIntBits:    targetIntBits,
+		typed:            typed,
+		definedFuncs:     make(map[string]formalFuncSig, len(funcs)),
+		funcSymbolByDecl: make(map[*ast.FuncDecl]string, len(funcs)),
+		namedTypes:       make(map[string]struct{}),
+		externByKey:      make(map[string]formalExternDecl),
+		funcLitByKey:     make(map[string]int),
+		scopeByNode:      make(map[ast.Node]int),
+		parentByNode:     make(map[ast.Node]ast.Node),
 	}
+	symbolCounts := make(map[string]int)
 	for _, fn := range funcs {
-		module.definedFuncs[formalFuncSymbol(fn, module)] = formalFuncSigFromDecl(fn, module)
+		base := formalBaseFuncSymbol(fn, module)
+		symbol := base
+		if count := symbolCounts[base]; count != 0 {
+			symbol = fmt.Sprintf("%s__decl%d", base, count+1)
+		}
+		symbolCounts[base]++
+		module.funcSymbolByDecl[fn] = symbol
+		module.definedFuncs[symbol] = formalFuncSigFromDecl(fn, module)
 	}
 	if file != nil {
 		for _, decl := range file.Decls {
@@ -72,6 +82,15 @@ func formalPackageName(file *ast.File) string {
 }
 
 func formalFuncSymbol(fn *ast.FuncDecl, module *formalModuleContext) string {
+	if module != nil {
+		if symbol, ok := module.funcSymbolByDecl[fn]; ok {
+			return symbol
+		}
+	}
+	return formalBaseFuncSymbol(fn, module)
+}
+
+func formalBaseFuncSymbol(fn *ast.FuncDecl, module *formalModuleContext) string {
 	if fn == nil || fn.Name == nil {
 		return "anon"
 	}

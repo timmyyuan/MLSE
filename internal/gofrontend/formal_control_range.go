@@ -4,9 +4,13 @@ package gofrontend
 import (
 	"go/ast"
 	"go/token"
+	"go/types"
 )
 
-func inferFormalRangeValueType(name string, sourceTy string, body *ast.BlockStmt, env *formalEnv) string {
+func inferFormalRangeValueType(rangeStmt *ast.RangeStmt, name string, sourceTy string, body *ast.BlockStmt, env *formalEnv) string {
+	if typedTy, ok := formalTypedRangeValueType(rangeStmt, env.module); ok {
+		return typedTy
+	}
 	valueTy := formalIndexResultType(sourceTy)
 	if !isFormalOpaquePlaceholderType(valueTy) {
 		return valueTy
@@ -25,6 +29,33 @@ func inferFormalRangeValueType(name string, sourceTy string, body *ast.BlockStmt
 		return usedTy
 	}
 	return valueTy
+}
+
+func formalTypedRangeValueType(rangeStmt *ast.RangeStmt, module *formalModuleContext) (string, bool) {
+	if rangeStmt == nil || module == nil {
+		return "", false
+	}
+	ty, ok := formalResolvedGoTypesType(rangeStmt.X, module)
+	if !ok || ty == nil {
+		return "", false
+	}
+	switch t := types.Unalias(ty).(type) {
+	case *types.Map:
+		return goTypesTypeToFormalMLIR(t.Elem(), module), true
+	case *types.Slice:
+		return goTypesTypeToFormalMLIR(t.Elem(), module), true
+	case *types.Array:
+		return goTypesTypeToFormalMLIR(t.Elem(), module), true
+	case *types.Pointer:
+		if arr, ok := types.Unalias(t.Elem()).(*types.Array); ok {
+			return goTypesTypeToFormalMLIR(arr.Elem(), module), true
+		}
+	case *types.Basic:
+		if t.Kind() == types.String {
+			return "i8", true
+		}
+	}
+	return "", false
 }
 
 func inferFormalIdentUsageType(node ast.Node, name string, env *formalEnv) string {
@@ -84,6 +115,10 @@ func inferFormalIdentContextType(ident *ast.Ident, parent ast.Node, env *formalE
 			if hint := formalCallArgHint(node, i, env); hint != "" {
 				return hint
 			}
+		}
+	case *ast.UnaryExpr:
+		if node.Op == token.NOT {
+			return "i1"
 		}
 	}
 	return formalOpaqueType("value")
