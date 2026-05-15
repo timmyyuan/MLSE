@@ -153,6 +153,20 @@ go run ./cmd/mlse-go ./examples/go/simple_add.go
 
 当前 `cmd/mlse-go` 只输出正式 `go` dialect bridge 的最小 parseable 子集。
 
+### 运行 Go formal debug 页面
+
+```bash
+go run ./cmd/mlse-debug ./examples/go/simple_add.go
+```
+
+或使用构建后的二进制：
+
+```bash
+./artifacts/bin/mlse-debug ./examples/go/simple_add.go
+```
+
+默认监听 `127.0.0.1:8080`，页面左侧展示 Go 源码，右侧展示 formal MLIR 指令，并依据 `loc(...)` 元数据做行级联动。`-addr 127.0.0.1:0` 可以让系统选择临时端口，`-open` 可以尝试自动打开系统浏览器。
+
 ### 运行 gobench-eq MLIR suite
 
 如果本机存在相邻 checkout `../gobench-eq`，可以运行：

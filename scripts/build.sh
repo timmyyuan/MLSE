@@ -7,6 +7,8 @@ cd "$ROOT"
 mkdir -p "$ROOT/artifacts/bin"
 go build -o "$ROOT/artifacts/bin/mlse-go" ./cmd/mlse-go
 go build -o "$ROOT/artifacts/bin/mlse-go-ssa-dump" ./cmd/mlse-go-ssa-dump
+go build -o "$ROOT/artifacts/bin/mlse-debug" ./cmd/mlse-debug
 
 echo "built: $ROOT/artifacts/bin/mlse-go"
 echo "built: $ROOT/artifacts/bin/mlse-go-ssa-dump"
+echo "built: $ROOT/artifacts/bin/mlse-debug"
