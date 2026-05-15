@@ -9,7 +9,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 ## 当前状态
 
 - 状态：初始化中，已落下第一条可运行的前端/执行闭环
-- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP、正式 `go` dialect C++/TableGen 骨架，以及 LLVM-dialect MLIR 的 `mlse-run` MVP
+- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP、`cmd/mlse-debug` 浏览器调试页、正式 `go` dialect C++/TableGen 骨架，以及 LLVM-dialect MLIR 的 `mlse-run` MVP
 - 文档：已补充技术规划版 spec、docs 索引、Go 前端说明、正式 GoIR dialect bootstrap 说明，以及 changelog 工作状态目录
 - 目标：继续收敛到真实 frontend / MLIR 管线，并把当前 formal bridge 扩展成可维护实现
 
@@ -109,6 +109,18 @@ module {
 
 - [docs/go-frontend.md](docs/go-frontend.md)
 - [docs/execution.md](docs/execution.md)
+
+### `cmd/mlse-debug`
+
+这是一个面向 Go formal bridge 的本地调试页面。它会读取单个 `.go` 文件，复用 `cmd/mlse-go` 的 formal MLIR 输出，并在浏览器里用左右布局展示源码行和对应的 MLIR 指令。
+
+运行示例：
+
+```bash
+go run ./cmd/mlse-debug ./examples/go/simple_add.go
+```
+
+默认监听 `127.0.0.1:8080`。如果希望系统浏览器自动打开页面，可以加 `-open`；如果端口被占用，可以用 `-addr 127.0.0.1:0` 让系统选择临时端口。
 
 ### 正式 GoIR bootstrap
 

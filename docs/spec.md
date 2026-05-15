@@ -520,6 +520,7 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 - `mlse-opt`：调试和执行 MLIR pass pipeline。
 - `mlse-translate`：负责 MLIR 与 LLVM IR 相关翻译或导出。
 - `mlse-run`：执行 MLSE 当前支持的 MLIR / LLVM IR 子集，并输出可观测程序行为。
+- `mlse-debug`：调试前端输出的本地浏览器页面，当前先覆盖 Go 源码与 formal MLIR 指令的左右联动视图。
 
 建议输出接口至少覆盖：
 

@@ -4,6 +4,7 @@
 
 | 日期 | 状态 | 主题 | 范围 |
 | --- | --- | --- | --- |
+| 2026-05-15 | 已完成 | [新增 mlse-debug 浏览器调试页面](2026-05-15-mlse-debug-ui-1912.md) | cmd/mlse-debug、debug UI |
 | 2026-05-14 | 已完成 | [提交当前本地改动](2026-05-14-commit-local-changes-1243.md) | 本地提交 |
 | 2026-05-12 | 已完成 | [GitHub issue 自动化修复运行](2026-05-12-issue-automation-1531.md) | Go frontend、SymbolicDiff、PR/CI |
 | 2026-05-12 | 已跳过 | [GitHub issue 自动化修复运行](2026-05-12-issue-automation-1502.md) | GitHub 权限检查、自动化 |

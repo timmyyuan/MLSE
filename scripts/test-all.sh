@@ -181,6 +181,7 @@ print_section "mlir-build"
 
 MLSE_OPT=${MLSE_OPT:-$ROOT/tmp/cmake-mlir-build/tools/mlse-opt/mlse-opt}
 MLSE_GO=${MLSE_GO:-$ROOT/artifacts/bin/mlse-go}
+MLSE_DEBUG=${MLSE_DEBUG:-$ROOT/artifacts/bin/mlse-debug}
 MLSE_RUN=${MLSE_RUN:-$ROOT/tmp/cmake-mlir-build/tools/mlse-run/mlse-run}
 OUT_DIR=${OUT_DIR:-$ROOT/tmp/test-all}
 
@@ -191,6 +192,11 @@ fi
 
 if [[ ! -x "$MLSE_GO" ]]; then
   echo "error: mlse-go not found at $MLSE_GO" >&2
+  exit 1
+fi
+
+if [[ ! -x "$MLSE_DEBUG" ]]; then
+  echo "error: mlse-debug not found at $MLSE_DEBUG" >&2
   exit 1
 fi
 
