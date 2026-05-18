@@ -109,7 +109,7 @@ module {
 
 ### `cmd/mlse-debug`
 
-这是一个面向 Go formal bridge 的本地调试页面。它会读取单个 `.go` 文件，复用 `cmd/mlse-go` 的 formal MLIR 输出，并在浏览器里用左右布局展示源码行和对应的 MLIR 指令。
+这是一个面向 Go formal bridge 的本地调试页面。它会读取单个 `.go` 文件，复用 `cmd/mlse-go` 的 formal MLIR 输出，并在浏览器里用左右布局展示源码行和对应的 MLIR 指令。页面还会解析 `go.scope_table`，在下方面板展示函数 / `if` / `for` / `range` 等 scope 与指令数量。
 
 运行示例：
 
@@ -118,6 +118,12 @@ go run ./cmd/mlse-debug ./examples/go/simple_add.go
 ```
 
 默认监听 `127.0.0.1:8080`。如果希望系统浏览器自动打开页面，可以加 `-open`；如果端口被占用，可以用 `-addr 127.0.0.1:0` 让系统选择临时端口。
+
+如果已经有 symbolic-diff probe 产物，可以把 `summary.json` 作为 trace 输入，让页面展示 path、old/new frame 和 stage timeline：
+
+```bash
+go run ./cmd/mlse-debug -trace artifacts/symbolic-diff-go-pipeline-probe/summary.json ./examples/go/simple_add.go
+```
 
 ### 正式 GoIR bootstrap
 

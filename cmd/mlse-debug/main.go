@@ -16,9 +16,10 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
 	openBrowser := flag.Bool("open", false, "open the debug page in a browser")
+	tracePath := flag.String("trace", "", "optional trace JSON or symbolic-diff summary.json")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [flags] <input.go>\n", os.Args[0])
-		fmt.Fprintln(flag.CommandLine.Output(), "Render Go source and MLSE formal instructions in a browser.")
+		fmt.Fprintln(flag.CommandLine.Output(), "Render Go source, MLSE formal instructions, scopes and optional trace data in a browser.")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -27,7 +28,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	snapshot, err := debugview.BuildSnapshot(flag.Arg(0))
+	snapshot, err := debugview.BuildSnapshotWithTrace(flag.Arg(0), *tracePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mlse-debug: %v\n", err)
 		os.Exit(1)

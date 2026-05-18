@@ -15,12 +15,14 @@ import (
 )
 
 type Snapshot struct {
-	SourcePath   string        `json:"sourcePath"`
-	SourceName   string        `json:"sourceName"`
-	SourceLines  []SourceLine  `json:"sourceLines"`
-	Instructions []Instruction `json:"instructions"`
-	FormalMLIR   string        `json:"formalMLIR"`
-	Summary      Summary       `json:"summary"`
+	SourcePath   string         `json:"sourcePath"`
+	SourceName   string         `json:"sourceName"`
+	SourceLines  []SourceLine   `json:"sourceLines"`
+	Instructions []Instruction  `json:"instructions"`
+	Scopes       []Scope        `json:"scopes"`
+	Trace        *TraceSnapshot `json:"trace,omitempty"`
+	FormalMLIR   string         `json:"formalMLIR"`
+	Summary      Summary        `json:"summary"`
 }
 
 type SourceLine struct {
@@ -39,18 +41,37 @@ type Instruction struct {
 	File   string `json:"file,omitempty"`
 }
 
+type Scope struct {
+	ID               int    `json:"id"`
+	Label            string `json:"label"`
+	Parent           int    `json:"parent"`
+	Kind             string `json:"kind"`
+	Name             string `json:"name"`
+	File             string `json:"file,omitempty"`
+	Line             int    `json:"line,omitempty"`
+	Column           int    `json:"column,omitempty"`
+	InstructionCount int    `json:"instructionCount"`
+}
+
 type Summary struct {
 	TotalInstructions   int `json:"totalInstructions"`
 	LocatedInstructions int `json:"locatedInstructions"`
 	TodoInstructions    int `json:"todoInstructions"`
+	TotalScopes         int `json:"totalScopes"`
+	TracePaths          int `json:"tracePaths"`
 }
 
 var (
 	scopedLocPattern = regexp.MustCompile(`loc\("([^"]+)"\("([^"]+)":([0-9]+):([0-9]+)\)\)`)
 	plainLocPattern  = regexp.MustCompile(`loc\("([^"]+)":([0-9]+):([0-9]+)\)`)
+	scopePattern     = regexp.MustCompile(`\{id = ([0-9]+) : i64, label = "([^"]*)", parent = (-?[0-9]+) : i64, kind = "([^"]*)", name = "([^"]*)", file = "([^"]*)", line = ([0-9]+) : i64, col = ([0-9]+) : i64\}`)
 )
 
 func BuildSnapshot(path string) (Snapshot, error) {
+	return BuildSnapshotWithTrace(path, "")
+}
+
+func BuildSnapshotWithTrace(path string, tracePath string) (Snapshot, error) {
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read source: %w", err)
@@ -59,19 +80,32 @@ func BuildSnapshot(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("compile formal MLIR: %w", err)
 	}
+	trace, err := LoadTrace(tracePath)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("load trace: %w", err)
+	}
 	sourceLines := splitSourceLines(string(source))
 	instructions := parseInstructions(formal)
+	scopes := parseScopes(formal)
+	attachScopeInstructionCounts(scopes, instructions)
 	counts := countInstructionsByLine(instructions)
 	for i := range sourceLines {
 		sourceLines[i].InstructionCount = counts[sourceLines[i].Number]
+	}
+	summary := summarizeInstructions(instructions)
+	summary.TotalScopes = len(scopes)
+	if trace != nil {
+		summary.TracePaths = len(trace.Paths)
 	}
 	return Snapshot{
 		SourcePath:   path,
 		SourceName:   filepath.Base(path),
 		SourceLines:  sourceLines,
 		Instructions: instructions,
+		Scopes:       scopes,
+		Trace:        trace,
 		FormalMLIR:   formal,
-		Summary:      summarizeInstructions(instructions),
+		Summary:      summary,
 	}, nil
 }
 
@@ -90,6 +124,14 @@ func NewServer(snapshot Snapshot) http.Handler {
 	mux.HandleFunc("/debug.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(snapshot)
+	})
+	mux.HandleFunc("/trace.json", func(w http.ResponseWriter, r *http.Request) {
+		if snapshot.Trace == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(snapshot.Trace)
 	})
 	mux.HandleFunc("/raw.mlir", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -137,6 +179,39 @@ func fillLocation(inst *Instruction, text string) {
 		inst.File = match[1]
 		inst.Line = atoi(match[2])
 		inst.Column = atoi(match[3])
+	}
+}
+
+func parseScopes(formal string) []Scope {
+	matches := scopePattern.FindAllStringSubmatch(formal, -1)
+	out := make([]Scope, 0, len(matches))
+	for _, match := range matches {
+		if len(match) != 9 {
+			continue
+		}
+		out = append(out, Scope{
+			ID:     atoi(match[1]),
+			Label:  match[2],
+			Parent: atoi(match[3]),
+			Kind:   match[4],
+			Name:   match[5],
+			File:   match[6],
+			Line:   atoi(match[7]),
+			Column: atoi(match[8]),
+		})
+	}
+	return out
+}
+
+func attachScopeInstructionCounts(scopes []Scope, instructions []Instruction) {
+	counts := make(map[string]int)
+	for _, inst := range instructions {
+		if inst.Scope != "" {
+			counts[inst.Scope]++
+		}
+	}
+	for i := range scopes {
+		scopes[i].InstructionCount = counts[scopes[i].Label]
 	}
 }
 
