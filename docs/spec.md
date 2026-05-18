@@ -508,6 +508,7 @@ docker run --rm -it -v "$PWD":/workspace -w /workspace mlse-dev bash
 - `mlse-translate`：负责 MLIR 与 LLVM IR 相关翻译或导出。
 - `mlse-run`：执行 MLSE 当前支持的 MLIR / LLVM IR 子集，并输出可观测程序行为。
 - `mlse-debug`：调试前端输出的本地浏览器页面，当前覆盖 Go 源码、formal MLIR 指令、`go.scope_table` scopes，以及可选 symbolic-diff trace summary 的 path/frame/stage timeline 视图。
+- `mlse-diff`：从目标 Git 仓库两个 commit 的函数级 Go diff 生成 symbolic-diff case，并复用现有 Go/KLEE probe 检查 same-input 等价性。
 
 建议输出接口至少覆盖：
 

@@ -77,6 +77,13 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
@@ -413,7 +420,7 @@ def probe_side(
     out_dir: Path,
     tools: dict[str, str | None],
 ) -> tuple[dict[str, Any], str | None]:
-    record: dict[str, Any] = {"label": label, "source": str(source.relative_to(REPO_ROOT))}
+    record: dict[str, Any] = {"label": label, "source": display_path(source)}
     formal = out_dir / f"01-{label}.formal.mlir"
     roundtrip = out_dir / f"02-{label}.roundtrip.mlir"
     go_lowered = out_dir / f"03-{label}.go-lowered.mlir"

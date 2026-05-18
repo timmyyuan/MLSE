@@ -23,6 +23,7 @@ MLSE 当前还处于早期原型阶段。
 - `scripts/clean.sh`：清理仓库内临时产物和 tinygo 实验目录
 - `scripts/go-gobench-mlir-suite.py`：对外部 `../gobench-eq` Go 样本跑 formal MLIR / `mlse-opt` round-trip / `mlse-opt --lower-go-bootstrap` / LLVM probe
 - `scripts/go-exec-diff-suite.py`：对 repo-owned `test/GoExec/cases/` 样例跑 native Go vs `mlse-run` 的 stdout / stderr 差分
+- `cmd/mlse-diff`：从目标 Git 仓库两个 commit 的 Go 函数级 diff 生成 symbolic-diff case，并复用现有 Go/KLEE probe
 - `scripts/mlse-diff-smoke.py`：准备函数级 symbolic diff fixtures，并可在安装了 KLEE 的环境里跑最小 KLEE 工具链 smoke
 - `scripts/docker-symbolic-diff-build.sh`：构建 symbolic diff / KLEE 开发镜像
 - `scripts/docker-symbolic-diff-run.sh`：以当前仓库挂载方式进入 symbolic diff / KLEE 开发镜像
@@ -37,6 +38,9 @@ scripts/build.sh
 
 ```text
 artifacts/bin/mlse-go
+artifacts/bin/mlse-go-ssa-dump
+artifacts/bin/mlse-debug
+artifacts/bin/mlse-diff
 ```
 
 ### 测试
@@ -68,6 +72,7 @@ scripts/test-all.sh
 - `mlse-opt --lower-go-builtins` 对 `test/GoIR/ir/bootstrap_ops.mlir` 的 builtin lowering 检查
 - `mlse-opt --lower-go-bootstrap` 对 `test/GoIR/ir/bootstrap_ops.mlir` 的 bootstrap lowering 检查
 - `cmd/mlse-go` 生成并桥接验证 `examples/go/simple_add.go`、`sign_if.go`、`choose_merge.go`、`sum_for.go`
+- `cmd/mlse-diff` 是否已由 `scripts/build.sh` 产出
 - `scripts/go-exec-diff-suite.py --skip-build`，验证 `test/GoExec/cases/goexec-spec-*` 的 native Go vs `mlse-run` 差分
 
 其中 `mlir-fixtures` 和 `frontend-bridge` 两段会逐个打印正在跑的文件，以及对应的 `PASS` / `FAIL` 状态。
@@ -303,6 +308,17 @@ python3 scripts/mlse-diff-go-pipeline-probe.py
 ```
 
 这条探针会把 `old.go` / `new.go` 分别跑到 `mlse-go -> mlse-opt -> mlse-opt --lower-go-bootstrap -> mlir-opt -> mlir-translate -> llvm-as`，并在 `artifacts/symbolic-diff-go-pipeline-probe/summary.json` 里记录第一个阻塞点。不带 `--run-klee` 时，它只验证 old/new 两侧 Go 函数已经能产出 bitcode。
+
+如果输入来自另一个 Git 仓库的两个 commit，可以先用 `cmd/mlse-diff` 生成同一套 case 布局并自动调用上面的 probe：
+
+```bash
+go run ./cmd/mlse-diff \
+  -file pkg/calc.go \
+  -function F \
+  ../target-repo old-commit new-commit
+```
+
+这个命令假设 diff 是单个 Go 函数级入口：函数内部修改会直接比较同名函数；“一个函数拆成多个 helper”或反向合并时，只要入口函数签名不变，命令会保留入口文件和同 package 其它变更 Go 文件里的 helper，并比较入口函数。如果入口函数被改名，可以显式传入 `-old-function` 和 `-new-function`，命令会在两侧生成同签名 wrapper，让现有 same-input harness 比较同一个符号。当前自动 KLEE model 只覆盖 `int` / `int64` 标量参数返回值，以及一个 `[]int -> []int` 的 `slice_i64` model；其它签名会生成 `klee_model_unavailable` blocker，而不是伪装成已证明等价。
 
 如果想先用 concrete 输入快速探索 old/new 是否出现可观测差异，可以运行：
 

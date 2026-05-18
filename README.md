@@ -9,7 +9,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 ## 当前状态
 
 - 状态：初始化中，已落下第一条可运行的前端/执行闭环
-- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP、`cmd/mlse-debug` 浏览器调试页、正式 `go` dialect C++/TableGen 骨架，以及 LLVM-dialect MLIR 的 `mlse-run` MVP
+- 代码：已提供 `cmd/mlse-go` 最小 Go 前端 MVP、`cmd/mlse-debug` 浏览器调试页、`cmd/mlse-diff` commit diff symbolic-diff 入口、正式 `go` dialect C++/TableGen 骨架，以及 LLVM-dialect MLIR 的 `mlse-run` MVP
 - 文档：已补充技术规划版 spec、docs 索引、Go 前端说明、正式 GoIR dialect bootstrap 说明，以及本轮 changelog 工作记录
 - 目标：继续收敛到真实 frontend / MLIR 管线，并把当前 formal bridge 扩展成可维护实现
 
@@ -32,6 +32,7 @@ MLSE 是一个多语言到 MLIR 的编译基础设施项目。
 函数级 symbolic diff 方向已经新增早期准备入口：
 
 - `test/SymbolicDiff/cases/`：old/new 函数级等价测试样例
+- `cmd/mlse-diff`：从一个 Git 仓库两个 commit 的 Go 函数级 diff 生成 `old.go` / `new.go` / `case.json`，并复用现有 Go/KLEE probe
 - `scripts/mlse-diff-smoke.py`：fixture 与 KLEE 工具链 smoke 入口
 - `scripts/mlse-diff-fuzz-smoke.py`：coverage-guided concrete same-input diff smoke，用于早期发现反例但不作为等价证明
 - `docker/Dockerfile.symbolic-diff`：面向后续 KLEE vertical slice 的容器环境
@@ -124,6 +125,18 @@ go run ./cmd/mlse-debug ./examples/go/simple_add.go
 ```bash
 go run ./cmd/mlse-debug -trace artifacts/symbolic-diff-go-pipeline-probe/summary.json ./examples/go/simple_add.go
 ```
+
+### `cmd/mlse-diff`
+
+这是一个面向 Go 函数级 diff 的命令入口。它读取目标 Git 仓库的两个 commit，定位单个函数级改动，生成现有 symbolic-diff probe 需要的 `old.go`、`new.go` 和 `case.json`，然后可以继续调用 `scripts/mlse-diff-go-pipeline-probe.py` 走 `mlse-go -> mlse-opt -> LLVM bitcode -> KLEE` 链路。
+
+运行示例：
+
+```bash
+go run ./cmd/mlse-diff -file pkg/calc.go -function F ../target-repo old-commit new-commit
+```
+
+默认只跑到现有 probe 的 bitcode 可达性检查；在带 KLEE 的环境里加 `-run-klee`，命令会要求 probe summary 为 `ok`。拆分 / 合并 helper 时，命令会保留入口文件和同 package 其它变更 Go 文件里的 helper；如果一次函数级改动把入口函数改名，可以用 `-old-function` 和 `-new-function` 指定两侧入口，命令会生成同签名 wrapper 供 same-input harness 比较。
 
 ### 正式 GoIR bootstrap
 
