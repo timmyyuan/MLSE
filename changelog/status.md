@@ -7,10 +7,10 @@
 | 工作状态 | 空闲 |
 | 当前 agent | 无 |
 | 工作范围 | 无 |
-| 关联记录 | [2026-05-18-mlse-debug-trace-scopes-2001.md](entries/2026-05-18-mlse-debug-trace-scopes-2001.md) |
+| 关联记录 | [2026-05-18-mlse-debug-trace-css-fix-2021.md](entries/2026-05-18-mlse-debug-trace-css-fix-2021.md) |
 | 开始时间 | 无 |
 | 最后更新 | 2026-05-18 |
-| 交接备注 | `cmd/mlse-debug` trace/scopes 第一版已完成本地实现和验证；后续可进入提交、PR 和 CI 流程。 |
+| 交接备注 | `cmd/mlse-debug` trace 面板隐藏样式已修复并完成本地验证；后续可进入提交、PR 和 CI 流程。 |
 
 ## 状态说明
 

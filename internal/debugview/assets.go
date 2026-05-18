@@ -227,7 +227,7 @@ const debugHTML = `<!doctype html>
     .source-line.todo, .inst.todo {
       background: var(--warn-soft);
     }
-    .hidden { display: none; }
+    .hidden { display: none !important; }
     .empty {
       padding: 24px;
       color: var(--muted);
