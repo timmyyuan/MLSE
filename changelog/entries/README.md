@@ -4,6 +4,8 @@
 
 | 日期 | 状态 | 主题 | 范围 |
 | --- | --- | --- | --- |
+| 2026-05-18 | 已完成 | [修复 mlse-diff method receiver 与 variadic helper 边界](2026-05-18-mlse-diff-method-variadic-2320.md) | internal/symbolicdiff、cmd/mlse-diff 文档 |
+| 2026-05-18 | 已完成 | [批量导入 Motus smtcmp mod* showcase](2026-05-18-mlse-diff-showcase-motus-mods-2238.md) | artifacts/mlse-diff-showcase |
 | 2026-05-18 | 已完成 | [新增 commit 间函数级 diff 等价性工具](2026-05-18-mlse-diff-commit-tool-2120.md) | cmd/mlse-diff、symbolic-diff |
 | 2026-05-18 | 已完成 | [修复 mlse-debug trace 面板隐藏样式](2026-05-18-mlse-debug-trace-css-fix-2021.md) | cmd/mlse-debug、trace UI |
 | 2026-05-18 | 已完成 | [为 mlse-debug 增加 trace/scopes 调试基础](2026-05-18-mlse-debug-trace-scopes-2001.md) | cmd/mlse-debug、trace/scopes |

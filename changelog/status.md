@@ -7,10 +7,10 @@
 | 工作状态 | 空闲 |
 | 当前 agent | - |
 | 工作范围 | - |
-| 关联记录 | [2026-05-18-mlse-diff-commit-tool-2120.md](entries/2026-05-18-mlse-diff-commit-tool-2120.md) |
-| 开始时间 | 2026-05-18 21:20 CST |
+| 关联记录 | [2026-05-18-mlse-diff-method-variadic-2320.md](entries/2026-05-18-mlse-diff-method-variadic-2320.md) |
+| 开始时间 | 2026-05-18 23:20 CST |
 | 最后更新 | 2026-05-18 |
-| 交接备注 | cmd/mlse-diff 已实现并完成本地验证；等待 PR/CI。 |
+| 交接备注 | 已修复 mlse-diff prepare 对 method receiver 和非入口 variadic helper 的支持边界；Motus showcase 中 mod1..mod39 均可生成 case。 |
 
 ## 状态说明
 
