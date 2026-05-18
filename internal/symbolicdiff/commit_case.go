@@ -124,8 +124,9 @@ type functionInfo struct {
 }
 
 type signatureInfo struct {
-	Params  []paramInfo
-	Results []string
+	Params   []paramInfo
+	Results  []string
+	Variadic bool
 }
 
 type paramInfo struct {
@@ -317,14 +318,14 @@ func analyzeFileDiff(ctx context.Context, opts PrepareOptions, path string) (*se
 	if err != nil {
 		return nil, err
 	}
-	if oldFn.decl.Recv != nil || newFn.decl.Recv != nil {
-		return nil, errors.New("method diffs are not supported by the current single-file Go symbolic diff harness")
+	if oldFn.sig.Variadic || newFn.sig.Variadic {
+		return nil, errors.New("variadic entry functions are not supported by the current symbolic diff harness")
 	}
 	if !sameSignature(oldFn.sig, newFn.sig) {
 		return nil, errors.New("old/new entry functions must have the same signature")
 	}
 	wrapper := ""
-	if oldFn.name != newFn.name {
+	if oldFn.name != newFn.name || oldFn.isMethod() || newFn.isMethod() {
 		wrapper = chooseWrapperName(oldFile, newFile)
 	}
 	return &selectedDiff{
@@ -430,22 +431,26 @@ func parseGoSource(path string, source string) (*parsedGoFile, error) {
 }
 
 func signatureFromFunc(fset *token.FileSet, fn *ast.FuncDecl) (signatureInfo, error) {
-	params, err := paramsFromFields(fset, fn.Type.Params)
+	params, variadic, err := paramsFromFields(fset, fn.Type.Params)
 	if err != nil {
 		return signatureInfo{}, err
 	}
+	if receiver := receiverParamFromFunc(fset, fn, params); receiver != nil {
+		params = append([]paramInfo{*receiver}, params...)
+	}
 	results := resultsFromFields(fset, fn.Type.Results)
-	return signatureInfo{Params: params, Results: results}, nil
+	return signatureInfo{Params: params, Results: results, Variadic: variadic}, nil
 }
 
-func paramsFromFields(fset *token.FileSet, fields *ast.FieldList) ([]paramInfo, error) {
+func paramsFromFields(fset *token.FileSet, fields *ast.FieldList) ([]paramInfo, bool, error) {
 	if fields == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 	var params []paramInfo
+	var variadic bool
 	for _, field := range fields.List {
 		if _, ok := field.Type.(*ast.Ellipsis); ok {
-			return nil, errors.New("variadic functions are not supported")
+			variadic = true
 		}
 		typ := exprString(fset, field.Type)
 		if len(field.Names) == 0 {
@@ -460,7 +465,38 @@ func paramsFromFields(fset *token.FileSet, fields *ast.FieldList) ([]paramInfo, 
 			params = append(params, paramInfo{Name: paramName, Type: typ})
 		}
 	}
-	return params, nil
+	return params, variadic, nil
+}
+
+func receiverParamFromFunc(fset *token.FileSet, fn *ast.FuncDecl, params []paramInfo) *paramInfo {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return nil
+	}
+	field := fn.Recv.List[0]
+	name := "recv"
+	if len(field.Names) > 0 && field.Names[0].Name != "" && field.Names[0].Name != "_" {
+		name = field.Names[0].Name
+	}
+	return &paramInfo{
+		Name: uniqueParamName(name, params),
+		Type: exprString(fset, field.Type),
+	}
+}
+
+func uniqueParamName(base string, params []paramInfo) string {
+	used := make(map[string]bool)
+	for _, param := range params {
+		used[param.Name] = true
+	}
+	if !used[base] {
+		return base
+	}
+	for i := 0; ; i++ {
+		name := fmt.Sprintf("%s%d", base, i)
+		if !used[name] {
+			return name
+		}
+	}
 }
 
 func resultsFromFields(fset *token.FileSet, fields *ast.FieldList) []string {
@@ -550,7 +586,9 @@ func sliceI64ModelSupported(sig signatureInfo) bool {
 }
 
 func sameSignature(oldSig signatureInfo, newSig signatureInfo) bool {
-	if len(oldSig.Params) != len(newSig.Params) || len(oldSig.Results) != len(newSig.Results) {
+	if oldSig.Variadic != newSig.Variadic ||
+		len(oldSig.Params) != len(newSig.Params) ||
+		len(oldSig.Results) != len(newSig.Results) {
 		return false
 	}
 	for i := range oldSig.Params {
@@ -682,11 +720,20 @@ func renderNonImportDecls(files []*parsedGoFile) []string {
 func wrapperSource(wrapper string, target *functionInfo) (string, error) {
 	params := formatParams(target.sig.Params)
 	results := formatResults(target.sig.Results)
-	args := formatArgs(target.sig.Params)
+	call := wrapperCall(target)
 	if len(target.sig.Results) == 0 {
-		return fmt.Sprintf("func %s(%s) {\n\t%s(%s)\n}\n", wrapper, params, target.name, args), nil
+		return fmt.Sprintf("func %s(%s) {\n\t%s\n}\n", wrapper, params, call), nil
 	}
-	return fmt.Sprintf("func %s(%s) %s {\n\treturn %s(%s)\n}\n", wrapper, params, results, target.name, args), nil
+	return fmt.Sprintf("func %s(%s) %s {\n\treturn %s\n}\n", wrapper, params, results, call), nil
+}
+
+func wrapperCall(target *functionInfo) string {
+	if !target.isMethod() {
+		return fmt.Sprintf("%s(%s)", target.name, formatArgs(target.sig.Params))
+	}
+	receiver := target.sig.Params[0].Name
+	args := formatArgs(target.sig.Params[1:])
+	return fmt.Sprintf("%s.%s(%s)", receiver, target.name, args)
 }
 
 func formatParams(params []paramInfo) string {
@@ -851,4 +898,8 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (fn *functionInfo) isMethod() bool {
+	return fn.decl.Recv != nil && len(fn.decl.Recv.List) > 0
 }

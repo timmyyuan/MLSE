@@ -99,6 +99,129 @@ func TestPrepareCaseAddsWrapperForRenamedEntry(t *testing.T) {
 	}
 }
 
+func TestPrepareCaseAddsWrapperForMethodEntry(t *testing.T) {
+	repo := newGitRepo(t)
+	writeRepoFile(t, repo, "playbook.go", `package sample
+
+type Playbook struct{}
+type PlaybookPms struct{}
+type PlaybookList []*Playbook
+
+func (pl *Playbook) Do2Bo() *PlaybookPms { return &PlaybookPms{} }
+
+func (pl PlaybookList) Do2Bo1() []*PlaybookPms {
+	var res []*PlaybookPms
+	for _, pb := range pl {
+		res = append(res, pb.Do2Bo())
+	}
+	return res
+}
+`)
+	oldCommit := commitAll(t, repo, "old")
+	writeRepoFile(t, repo, "playbook.go", `package sample
+
+type Playbook struct{}
+type PlaybookPms struct{}
+type PlaybookList []*Playbook
+
+func (pl *Playbook) Do2Bo() *PlaybookPms { return &PlaybookPms{} }
+
+func (pl PlaybookList) Do2Bo2() []*PlaybookPms {
+	var res []*PlaybookPms
+	if len(pl) > 0 {
+		res = make([]*PlaybookPms, 0, len(pl))
+	}
+	for _, pb := range pl {
+		res = append(res, pb.Do2Bo())
+	}
+	return res
+}
+`)
+	newCommit := commitAll(t, repo, "new")
+
+	result, metadata := prepareCaseForTest(t, repo, oldCommit, newCommit, PrepareOptions{
+		CaseName:    "method-entry",
+		OldFunction: "Do2Bo1",
+		NewFunction: "Do2Bo2",
+	})
+
+	if metadata.Function != "diffcase.MLSEDiffEntry" {
+		t.Fatalf("metadata function = %q, want wrapper", metadata.Function)
+	}
+	if len(metadata.Inputs) != 1 || metadata.Inputs[0].Name != "pl" || metadata.Inputs[0].Type != "PlaybookList" {
+		t.Fatalf("metadata inputs = %#v, want receiver as first parameter", metadata.Inputs)
+	}
+	oldSource := readCaseFile(t, result.CaseDir, "old.go")
+	if !strings.Contains(oldSource, "func MLSEDiffEntry(pl PlaybookList) []*PlaybookPms") ||
+		!strings.Contains(oldSource, "return pl.Do2Bo1()") {
+		t.Fatalf("old.go missing method wrapper:\n%s", oldSource)
+	}
+	newSource := readCaseFile(t, result.CaseDir, "new.go")
+	if !strings.Contains(newSource, "return pl.Do2Bo2()") {
+		t.Fatalf("new.go missing method wrapper:\n%s", newSource)
+	}
+}
+
+func TestPrepareCaseAllowsNonEntryVariadicHelper(t *testing.T) {
+	repo := newGitRepo(t)
+	writeRepoFile(t, repo, "calc.go", `package sample
+
+func logf(_ string, _ ...any) {}
+
+func Old(x int) int {
+	logf("old: %d", x)
+	return x + 1
+}
+`)
+	oldCommit := commitAll(t, repo, "old")
+	writeRepoFile(t, repo, "calc.go", `package sample
+
+func logf(_ string, _ ...any) {}
+
+func New(x int) int {
+	logf("new: %d", x)
+	return x + 1
+}
+`)
+	newCommit := commitAll(t, repo, "new")
+
+	result, metadata := prepareCaseForTest(t, repo, oldCommit, newCommit, PrepareOptions{
+		CaseName:    "variadic-helper",
+		OldFunction: "Old",
+		NewFunction: "New",
+	})
+
+	if metadata.CModel == nil || metadata.Function != "diffcase.MLSEDiffEntry" {
+		t.Fatalf("metadata did not keep scalar wrapper model: %+v", metadata)
+	}
+	oldSource := readCaseFile(t, result.CaseDir, "old.go")
+	if !strings.Contains(oldSource, "func logf(_ string, _ ...any)") {
+		t.Fatalf("old.go lost variadic helper:\n%s", oldSource)
+	}
+}
+
+func TestPrepareCaseRejectsVariadicEntry(t *testing.T) {
+	repo := newGitRepo(t)
+	writeRepoFile(t, repo, "calc.go", "package sample\n\nfunc F(x int, rest ...int) int { return x }\n")
+	oldCommit := commitAll(t, repo, "old")
+	writeRepoFile(t, repo, "calc.go", "package sample\n\nfunc F(x int, rest ...int) int { return x + 1 }\n")
+	newCommit := commitAll(t, repo, "new")
+
+	opts := PrepareOptions{
+		Repo:           repo,
+		OldCommit:      oldCommit,
+		NewCommit:      newCommit,
+		Function:       "F",
+		EmitDir:        filepath.Join(t.TempDir(), "out"),
+		ExpectedStatus: "equivalent",
+		SliceLength:    1,
+	}
+	_, err := PrepareCase(context.Background(), opts)
+	if err == nil || !strings.Contains(err.Error(), "variadic entry functions are not supported") {
+		t.Fatalf("PrepareCase() error = %v, want variadic entry rejection", err)
+	}
+}
+
 func prepareCaseForTest(t *testing.T, repo string, oldCommit string, newCommit string, opts PrepareOptions) (CaseResult, caseMetadata) {
 	t.Helper()
 	opts.Repo = repo
