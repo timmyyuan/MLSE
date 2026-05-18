@@ -165,7 +165,17 @@ go run ./cmd/mlse-debug ./examples/go/simple_add.go
 ./artifacts/bin/mlse-debug ./examples/go/simple_add.go
 ```
 
-默认监听 `127.0.0.1:8080`，页面左侧展示 Go 源码，右侧展示 formal MLIR 指令，并依据 `loc(...)` 元数据做行级联动。`-addr 127.0.0.1:0` 可以让系统选择临时端口，`-open` 可以尝试自动打开系统浏览器。
+默认监听 `127.0.0.1:8080`，页面左侧展示 Go 源码，右侧展示 formal MLIR 指令，并依据 `loc(...)` 元数据做行级联动。下方面板会展示来自 `go.scope_table` 的 scope 信息。`-addr 127.0.0.1:0` 可以让系统选择临时端口，`-open` 可以尝试自动打开系统浏览器。
+
+如果已经跑过 symbolic-diff Go pipeline probe，也可以载入它的 `summary.json`：
+
+```bash
+go run ./cmd/mlse-debug \
+  -trace artifacts/symbolic-diff-go-pipeline-probe/summary.json \
+  ./examples/go/simple_add.go
+```
+
+当前 trace 面板支持读取 probe summary 中的 path、old/new frame、stage timeline、blocker 和 counterexample 文件列表。它是 MLSE 自己的调试视图格式入口，不直接暴露 KLEE 内部状态；后续更完整的 symbolic trace 可以继续收敛到同一个 JSON 形状。
 
 ### 运行 gobench-eq MLIR suite
 

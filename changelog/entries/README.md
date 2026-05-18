@@ -4,6 +4,7 @@
 
 | 日期 | 状态 | 主题 | 范围 |
 | --- | --- | --- | --- |
+| 2026-05-18 | 已完成 | [为 mlse-debug 增加 trace/scopes 调试基础](2026-05-18-mlse-debug-trace-scopes-2001.md) | cmd/mlse-debug、trace/scopes |
 | 2026-05-15 | 已完成 | [新增 mlse-debug 浏览器调试页面](2026-05-15-mlse-debug-ui-1912.md) | cmd/mlse-debug、debug UI |
 
 ## 阅读规则
