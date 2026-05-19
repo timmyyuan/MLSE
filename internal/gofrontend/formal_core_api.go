@@ -66,7 +66,8 @@ func lookupFormalDefinedFuncSig(module *formalModuleContext, symbol string) (for
 		return formalFuncSig{}, false
 	}
 	return formalFuncSig{
-		params:  append([]string(nil), sig.params...),
-		results: append([]string(nil), sig.results...),
+		params:   append([]string(nil), sig.params...),
+		results:  append([]string(nil), sig.results...),
+		variadic: sig.variadic,
 	}, true
 }

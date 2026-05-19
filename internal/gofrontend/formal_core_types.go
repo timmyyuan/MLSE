@@ -10,8 +10,9 @@ type formalBinding struct {
 }
 
 type formalFuncSig struct {
-	params  []string
-	results []string
+	params   []string
+	results  []string
+	variadic bool
 }
 
 type formalExternDecl struct {
@@ -58,7 +59,8 @@ func formalFuncSigForType(ty string) *formalFuncSig {
 
 func cloneFormalFuncSig(sig formalFuncSig) *formalFuncSig {
 	return &formalFuncSig{
-		params:  append([]string(nil), sig.params...),
-		results: append([]string(nil), sig.results...),
+		params:   append([]string(nil), sig.params...),
+		results:  append([]string(nil), sig.results...),
+		variadic: sig.variadic,
 	}
 }

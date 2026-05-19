@@ -209,8 +209,9 @@ func (m *formalModuleContext) reserveFuncLitSymbol(sig formalFuncSig, enclosing 
 			continue
 		}
 		m.definedFuncs[symbol] = formalFuncSig{
-			params:  append([]string(nil), sig.params...),
-			results: append([]string(nil), sig.results...),
+			params:   append([]string(nil), sig.params...),
+			results:  append([]string(nil), sig.results...),
+			variadic: sig.variadic,
 		}
 		return symbol
 	}

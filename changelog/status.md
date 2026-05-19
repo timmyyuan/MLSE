@@ -5,12 +5,12 @@
 | 字段 | 值 |
 | --- | --- |
 | 工作状态 | 空闲 |
-| 当前 agent | - |
-| 工作范围 | - |
-| 关联记录 | [2026-05-19-mlse-diff-ci-supported-mods-0920.md](entries/2026-05-19-mlse-diff-ci-supported-mods-0920.md) |
-| 开始时间 | 2026-05-19 09:20 CST |
+| 当前 agent | 无 |
+| 工作范围 | 无 |
+| 关联记录 | [2026-05-19-mlse-diff-priority-1-6-1000.md](entries/2026-05-19-mlse-diff-priority-1-6-1000.md) |
+| 开始时间 | 无 |
 | 最后更新 | 2026-05-19 |
-| 交接备注 | 已补 supported Motus case CI 清单和 require-case-list 断言；本地验证通过，本机未安装 KLEE，真实 KLEE 由 CI Docker job 验证。 |
+| 交接备注 | 已完成 mlse-diff priority 1-6 修复并进入 PR/CI 阶段；真实 KLEE 执行由 GitHub Docker CI 覆盖。 |
 
 ## 状态说明
 
