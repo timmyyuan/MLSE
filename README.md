@@ -136,7 +136,7 @@ go run ./cmd/mlse-debug -trace artifacts/symbolic-diff-go-pipeline-probe/summary
 go run ./cmd/mlse-diff -file pkg/calc.go -function F ../target-repo old-commit new-commit
 ```
 
-默认只跑到现有 probe 的 bitcode 可达性检查；在带 KLEE 的环境里加 `-run-klee`，命令会要求 probe summary 为 `ok`。拆分 / 合并 helper 时，命令会保留入口文件和同 package 其它变更 Go 文件里的 helper；如果一次函数级改动把入口函数改名，可以用 `-old-function` 和 `-new-function` 指定两侧入口，命令会生成同签名 wrapper 供 same-input harness 比较。入口是 method 时，receiver 会作为 wrapper 的第一个显式参数参与比较；文件里的非入口 variadic helper 可以保留，但 variadic 入口函数本身暂不作为 symbolic-diff entry。当前 KLEE model 覆盖标量 int、`[]int`、bounded `string` / `[]string`、常量 `error` 返回，以及简单指针结构体首字段比较的早期 Go LLVM ABI 子集；数字格式化、context、map 语义、复杂对象图和外部 client 仍然会显式停在 unsupported / inconclusive 边界。
+默认只跑到现有 probe 的 bitcode 可达性检查；在带 KLEE 的环境里加 `-run-klee`，命令会要求 probe summary 为 `ok`。拆分 / 合并 helper 时，命令会保留入口文件和同 package 其它变更 Go 文件里的 helper；如果一次函数级改动把入口函数改名，可以用 `-old-function` 和 `-new-function` 指定两侧入口，命令会生成同签名 wrapper 供 same-input harness 比较。入口是 method 时，receiver 会作为 wrapper 的第一个显式参数参与比较；文件里的非入口 variadic helper 可以保留，但 variadic 入口函数本身暂不作为 symbolic-diff entry。当前 KLEE model 覆盖标量 int、`[]int`、bounded `string` / `[]string`、`void` 入口、常量 `error` / `(bool,error)` 返回，以及简单指针结构体首字段比较的早期 Go LLVM ABI 子集；真实 context、map 语义、复杂对象图和外部 client 仍然会显式停在 unsupported / inconclusive 边界。
 
 ### 正式 GoIR bootstrap
 

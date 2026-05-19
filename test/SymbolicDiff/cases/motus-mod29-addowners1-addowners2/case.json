@@ -9,5 +9,39 @@
     "old_function": "AddOwners1",
     "new_function": "AddOwners2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "ctx",
+      "type": "*RequestContext"
+    },
+    {
+      "name": "forceFail",
+      "type": "bool"
+    }
+  ],
+  "results": [
+    {
+      "type": "[]string"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "ctx",
+        "type": "opaque_ptr",
+        "length": 1
+      },
+      {
+        "name": "forceFail",
+        "type": "bool",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "slice_string",
+      "compare": "logical"
+    },
+    "notes": "The fixture constructs an empty AddOwnerRequest; the bounded model keeps Plugins empty, matching the executable fixture path."
+  }
 }

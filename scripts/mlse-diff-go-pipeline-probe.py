@@ -284,6 +284,31 @@ not_equal:
   ret i1 false
 }
 
+define i1 @__mlse_slice_string_strict_equal({ ptr, i64, i64 } %a, { ptr, i64, i64 } %b) {
+entry:
+  %aptr = extractvalue { ptr, i64, i64 } %a, 0
+  %bptr = extractvalue { ptr, i64, i64 } %b, 0
+  %alen = extractvalue { ptr, i64, i64 } %a, 1
+  %blen = extractvalue { ptr, i64, i64 } %b, 1
+  %acap = extractvalue { ptr, i64, i64 } %a, 2
+  %bcap = extractvalue { ptr, i64, i64 } %b, 2
+  %anil = icmp eq ptr %aptr, null
+  %bnil = icmp eq ptr %bptr, null
+  %same_nil = icmp eq i1 %anil, %bnil
+  %same_len = icmp eq i64 %alen, %blen
+  %same_cap = icmp eq i64 %acap, %bcap
+  %same_shape0 = and i1 %same_nil, %same_len
+  %same_shape = and i1 %same_shape0, %same_cap
+  br i1 %same_shape, label %compare_values, label %not_equal
+
+compare_values:
+  %same_values = call i1 @__mlse_slice_string_equal({ ptr, i64, i64 } %a, { ptr, i64, i64 } %b)
+  ret i1 %same_values
+
+not_equal:
+  ret i1 false
+}
+
 define i1 @__mlse_error_equal(ptr %a, ptr %b) {
 entry:
   %a_nil = icmp eq ptr %a, null
@@ -640,10 +665,368 @@ entry:
   ret ptr %obj
 }
 
+define i64 @__mlse_string_slice_len(ptr %slice) {
+entry:
+  %is_null = icmp eq ptr %slice, null
+  br i1 %is_null, label %zero, label %load_len
+
+load_len:
+  %len = load i64, ptr %slice, align 8
+  ret i64 %len
+
+zero:
+  ret i64 0
+}
+
+define ptr @__mlse_string_slice_index(ptr %slice, i64 %index) {
+entry:
+  %data_slot = getelementptr i8, ptr %slice, i64 8
+  %data = load ptr, ptr %data_slot, align 8
+  %elem = getelementptr { ptr, i64 }, ptr %data, i64 %index
+  ret ptr %elem
+}
+
+define { ptr, i64, i64 } @__mlse_string_slice_append({ ptr, i64, i64 } %slice, ptr %elem) {
+entry:
+  %old_data = extractvalue { ptr, i64, i64 } %slice, 0
+  %old_len = extractvalue { ptr, i64, i64 } %slice, 1
+  %new_len = add i64 %old_len, 1
+  %bytes = mul i64 %new_len, 16
+  %buf = call ptr @malloc(i64 %bytes)
+  br label %copy
+
+copy:
+  %i = phi i64 [ 0, %entry ], [ %next, %copy_body ]
+  %done = icmp eq i64 %i, %old_len
+  br i1 %done, label %append, label %copy_body
+
+copy_body:
+  %src = getelementptr { ptr, i64 }, ptr %old_data, i64 %i
+  %val = load { ptr, i64 }, ptr %src, align 8
+  %dst = getelementptr { ptr, i64 }, ptr %buf, i64 %i
+  store { ptr, i64 } %val, ptr %dst, align 8
+  %next = add i64 %i, 1
+  br label %copy
+
+append:
+  %elem_value = load { ptr, i64 }, ptr %elem, align 8
+  %tail = getelementptr { ptr, i64 }, ptr %buf, i64 %old_len
+  store { ptr, i64 } %elem_value, ptr %tail, align 8
+  %out0 = insertvalue { ptr, i64, i64 } undef, ptr %buf, 0
+  %out1 = insertvalue { ptr, i64, i64 } %out0, i64 %new_len, 1
+  %out2 = insertvalue { ptr, i64, i64 } %out1, i64 %new_len, 2
+  ret { ptr, i64, i64 } %out2
+}
+
 define void @runtime.panic.index(i64 %index, i64 %len) {
 entry:
   call void @klee_report_error(ptr @.file, i32 1, ptr @.panic, ptr @.panic_suffix)
   unreachable
+}
+"""
+
+
+GO_ABI_MOTUS_VOID_RUNTIME_IR = """
+define ptr @runtime.any.box.ptr.pair(ptr %value) {
+entry:
+  %box = call ptr @malloc(i64 8)
+  store ptr %value, ptr %box, align 8
+  ret ptr %box
+}
+"""
+
+
+GO_ABI_MOTUS_MOD12_RUNTIME_IR = """
+@__mlse_mod12_psm0_bytes = private unnamed_addr constant [1 x i8] c"p"
+@__mlse_mod12_psm1_bytes = private unnamed_addr constant [1 x i8] c"q"
+@__mlse_mod12_psm_data = global [2 x { ptr, i64 }] [{ ptr, i64 } { ptr @__mlse_mod12_psm0_bytes, i64 1 }, { ptr, i64 } { ptr @__mlse_mod12_psm1_bytes, i64 1 }]
+@__mlse_mod12_psm_slice = global { i64, ptr } { i64 2, ptr @__mlse_mod12_psm_data }
+@__mlse_mod12_psm_slot = global ptr @__mlse_mod12_psm_slice
+@__mlse_mod12_zero_i64 = global i64 0
+@__mlse_mod12_true_i1 = global i1 true
+
+define ptr @example.com.smtcmpmod12.dal.GetCDSConfKey({ ptr, i64 } %plugin) {
+entry:
+  ret ptr null
+}
+
+define ptr @example.com.smtcmpmod12.dal.GetKeyStatInfo(ptr %ctx, ptr %key) {
+entry:
+  ret ptr @__mlse_mod12_psm_slot
+}
+
+define void @example.com.smtcmpmod12.logs.CtxError(ptr %ctx, { ptr, i64 } %format, ptr %err, { ptr, i64 } %plugin) {
+entry:
+  ret void
+}
+
+define ptr @example.com.smtcmpmod12.sets.NewStringSetFromSlice({ ptr, i64, i64 } %items) {
+entry:
+  ret ptr null
+}
+
+define ptr @runtime.field.addr.PSM(ptr %value) {
+entry:
+  ret ptr @__mlse_mod12_psm_slot
+}
+
+define i64 @runtime.range.len.value(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define ptr @runtime.index.value(ptr %slice, i64 %index) {
+entry:
+  %elem = call ptr @__mlse_string_slice_index(ptr %slice, i64 %index)
+  ret ptr %elem
+}
+
+define i64 @runtime.convert.result.to.i64(ptr %value) {
+entry:
+  %out = load i64, ptr %value, align 8
+  ret i64 %out
+}
+
+define i1 @runtime.convert.result.to.bool(ptr %value) {
+entry:
+  %out = load i1, ptr %value, align 1
+  ret i1 %out
+}
+
+define i64 @__mlse_old_diffcase_len(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define i64 @__mlse_new_diffcase_len(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define ptr @__mlse_old_diffcase_Len(ptr %set) {
+entry:
+  ret ptr @__mlse_mod12_zero_i64
+}
+
+define ptr @__mlse_new_diffcase_Len(ptr %set) {
+entry:
+  ret ptr @__mlse_mod12_zero_i64
+}
+
+define ptr @__mlse_old_diffcase_Contains(ptr %set, ptr %item) {
+entry:
+  ret ptr @__mlse_mod12_true_i1
+}
+
+define ptr @__mlse_new_diffcase_Contains(ptr %set, ptr %item) {
+entry:
+  ret ptr @__mlse_mod12_true_i1
+}
+
+define { ptr, i64, i64 } @__mlse_old_diffcase_append({ ptr, i64, i64 } %slice, ptr %elem) {
+entry:
+  %out = call { ptr, i64, i64 } @__mlse_string_slice_append({ ptr, i64, i64 } %slice, ptr %elem)
+  ret { ptr, i64, i64 } %out
+}
+
+define { ptr, i64, i64 } @__mlse_new_diffcase_append({ ptr, i64, i64 } %slice, ptr %elem) {
+entry:
+  %out = call { ptr, i64, i64 } @__mlse_string_slice_append({ ptr, i64, i64 } %slice, ptr %elem)
+  ret { ptr, i64, i64 } %out
+}
+"""
+
+
+GO_ABI_MOTUS_MOD29_RUNTIME_IR = """
+@__mlse_mod29_empty_slice = global { i64, ptr } { i64 0, ptr null }
+@__mlse_mod29_plugins_slot = global ptr @__mlse_mod29_empty_slice
+@__mlse_mod29_zero_result = global i64 0
+
+define ptr @runtime.field.addr.Plugins(ptr %request) {
+entry:
+  ret ptr @__mlse_mod29_plugins_slot
+}
+
+define i64 @runtime.range.len.value(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define ptr @runtime.index.value(ptr %slice, i64 %index) {
+entry:
+  %elem = call ptr @__mlse_string_slice_index(ptr %slice, i64 %index)
+  ret ptr %elem
+}
+
+define ptr @runtime.zero.result() {
+entry:
+  ret ptr null
+}
+
+define i1 @runtime.neq.result(ptr %a, ptr %b) {
+entry:
+  %same = icmp eq ptr %a, %b
+  %neq = xor i1 %same, true
+  ret i1 %neq
+}
+
+define i64 @__mlse_old_diffcase_len(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define i64 @__mlse_new_diffcase_len(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define ptr @__mlse_old_diffcase_GetByPluginName(ptr %plugin_info, ptr %name) {
+entry:
+  ret ptr null
+}
+
+define ptr @__mlse_new_diffcase_GetByPluginName(ptr %plugin_info, ptr %name) {
+entry:
+  ret ptr null
+}
+
+define { ptr, i64, i64 } @__mlse_old_diffcase_append({ ptr, i64, i64 } %slice, ptr %elem) {
+entry:
+  %out = call { ptr, i64, i64 } @__mlse_string_slice_append({ ptr, i64, i64 } %slice, ptr %elem)
+  ret { ptr, i64, i64 } %out
+}
+
+define { ptr, i64, i64 } @__mlse_new_diffcase_append({ ptr, i64, i64 } %slice, ptr %elem) {
+entry:
+  %out = call { ptr, i64, i64 } @__mlse_string_slice_append({ ptr, i64, i64 } %slice, ptr %elem)
+  ret { ptr, i64, i64 } %out
+}
+"""
+
+
+GO_ABI_MOTUS_MOD30_RUNTIME_IR = """
+@__mlse_mod30_plugin0_bytes = private unnamed_addr constant [1 x i8] c"p"
+@__mlse_mod30_owner0_bytes = private unnamed_addr constant [1 x i8] c"o"
+@__mlse_mod30_plugins_data = global [1 x { ptr, i64 }] [{ ptr, i64 } { ptr @__mlse_mod30_plugin0_bytes, i64 1 }]
+@__mlse_mod30_owners_data = global [1 x { ptr, i64 }] [{ ptr, i64 } { ptr @__mlse_mod30_owner0_bytes, i64 1 }]
+@__mlse_mod30_plugins_slice = global { i64, ptr } { i64 1, ptr @__mlse_mod30_plugins_data }
+@__mlse_mod30_owners_slice = global { i64, ptr } { i64 1, ptr @__mlse_mod30_owners_data }
+@__mlse_mod30_plugins_slot = global ptr @__mlse_mod30_plugins_slice
+@__mlse_mod30_owners_slot = global ptr @__mlse_mod30_owners_slice
+@__mlse_mod30_get_error = global i64 1
+
+define ptr @example.com.smtcmpmod30.binding.BindAndValidate(ptr %ctx, ptr %request) {
+entry:
+  ret ptr null
+}
+
+define void @example.com.smtcmpmod30.logs.CtxWarn(ptr %ctx, { ptr, i64 } %format, ptr %err) {
+entry:
+  ret void
+}
+
+define void @example.com.smtcmpmod30.response.BadRequest(ptr %ctx, { ptr, i64 } %message) {
+entry:
+  ret void
+}
+
+define void @example.com.smtcmpmod30.response.OK(ptr %ctx, ptr %value) {
+entry:
+  ret void
+}
+
+define ptr @runtime.field.addr.Plugins(ptr %request) {
+entry:
+  ret ptr @__mlse_mod30_plugins_slot
+}
+
+define ptr @runtime.field.addr.Owners(ptr %request) {
+entry:
+  ret ptr @__mlse_mod30_owners_slot
+}
+
+define i64 @runtime.range.len.value(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define ptr @runtime.index.value(ptr %slice, i64 %index) {
+entry:
+  %elem = call ptr @__mlse_string_slice_index(ptr %slice, i64 %index)
+  ret ptr %elem
+}
+
+define ptr @runtime.zero.result() {
+entry:
+  ret ptr null
+}
+
+define i1 @runtime.neq.result(ptr %a, ptr %b) {
+entry:
+  %same = icmp eq ptr %a, %b
+  %neq = xor i1 %same, true
+  ret i1 %neq
+}
+
+define i64 @__mlse_old_diffcase_len(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define i64 @__mlse_new_diffcase_len(ptr %slice) {
+entry:
+  %len = call i64 @__mlse_string_slice_len(ptr %slice)
+  ret i64 %len
+}
+
+define ptr @__mlse_old_diffcase_GetByPluginName(ptr %plugin_info, ptr %name) {
+entry:
+  ret ptr @__mlse_mod30_get_error
+}
+
+define ptr @__mlse_new_diffcase_GetByPluginName(ptr %plugin_info, ptr %name) {
+entry:
+  ret ptr @__mlse_mod30_get_error
+}
+
+define { ptr, i64, i64 } @__mlse_old_diffcase_append({ ptr, i64, i64 } %slice, ptr %elem) {
+entry:
+  %out = call { ptr, i64, i64 } @__mlse_string_slice_append({ ptr, i64, i64 } %slice, ptr %elem)
+  ret { ptr, i64, i64 } %out
+}
+
+define { ptr, i64, i64 } @__mlse_new_diffcase_append({ ptr, i64, i64 } %slice, ptr %elem) {
+entry:
+  %out = call { ptr, i64, i64 } @__mlse_string_slice_append({ ptr, i64, i64 } %slice, ptr %elem)
+  ret { ptr, i64, i64 } %out
+}
+"""
+
+
+GO_ABI_MOTUS_MOD34_RUNTIME_IR = """
+@__mlse_default_product_id = global i64 1
+
+define ptr @defaultProductID() {
+entry:
+  ret ptr @__mlse_default_product_id
+}
+
+define i1 @runtime.type.assert.any.to.bool(ptr %value) {
+entry:
+  ret i1 false
+}
+
+define ptr @runtime.zero.any() {
+entry:
+  ret ptr null
 }
 """
 
@@ -727,6 +1110,19 @@ slash:
 }
 """
         )
+    if name in {
+        "motus-mod18-foo1-foo2",
+        "motus-mod20-foo1-foo2",
+    }:
+        pieces.append(GO_ABI_MOTUS_VOID_RUNTIME_IR)
+    if name == "motus-mod12-getallpsm1-getallpsm2":
+        pieces.append(GO_ABI_MOTUS_MOD12_RUNTIME_IR)
+    if name == "motus-mod29-addowners1-addowners2":
+        pieces.append(GO_ABI_MOTUS_MOD29_RUNTIME_IR)
+    if name == "motus-mod30-addowners1-addowners2":
+        pieces.append(GO_ABI_MOTUS_MOD30_RUNTIME_IR)
+    if name == "motus-mod34-getadddefaultfactiontype1-getadddefaultfactiontype2":
+        pieces.append(GO_ABI_MOTUS_MOD34_RUNTIME_IR)
     return "\n".join(piece.strip() for piece in pieces if piece.strip())
 
 
@@ -942,6 +1338,7 @@ def slice_i64_input_lines(name: str, length: int, bytes_len: int, mode: str) -> 
 def go_abi_llvm_type(model_type: str) -> str:
     mapping = {
         "bool": "i1",
+        "bool_error": "{ i1, ptr }",
         "conf_ptr": "ptr",
         "error": "ptr",
         "i64": "i64",
@@ -953,6 +1350,8 @@ def go_abi_llvm_type(model_type: str) -> str:
         "string": "{ ptr, i64 }",
         "string_bool": "{ { ptr, i64 }, i1 }",
         "slice_string": "{ ptr, i64, i64 }",
+        "slice_string_strict": "{ ptr, i64, i64 }",
+        "void": "void",
     }
     if model_type not in mapping:
         raise ValueError(f"unsupported go_llvm KLEE type {model_type!r}")
@@ -1178,9 +1577,23 @@ def go_abi_symbolic_state_setup(model: dict[str, Any]) -> tuple[list[str], list[
 
 
 def go_abi_compare_lines(return_type: str) -> list[str]:
+    if return_type == "void":
+        return [
+            "  %same = icmp eq i1 true, true"
+        ]
     if return_type == "i64":
         return [
             "  %same = icmp eq i64 %old_result, %new_result"
+        ]
+    if return_type == "bool_error":
+        return [
+            "  %old_bool = extractvalue { i1, ptr } %old_result, 0",
+            "  %new_bool = extractvalue { i1, ptr } %new_result, 0",
+            "  %same_bool = icmp eq i1 %old_bool, %new_bool",
+            "  %old_error = extractvalue { i1, ptr } %old_result, 1",
+            "  %new_error = extractvalue { i1, ptr } %new_result, 1",
+            "  %same_error = call i1 @__mlse_error_equal(ptr %old_error, ptr %new_error)",
+            "  %same = and i1 %same_bool, %same_error",
         ]
     if return_type == "string":
         return [
@@ -1197,9 +1610,9 @@ def go_abi_compare_lines(return_type: str) -> list[str]:
             "  %same = and i1 %same_string, %same_bool",
         ]
     if return_type == "slice_string":
-        return [
-            "  %same = call i1 @__mlse_slice_string_equal({ ptr, i64, i64 } %old_result, { ptr, i64, i64 } %new_result)"
-        ]
+        return ["  %same = call i1 @__mlse_slice_string_equal({ ptr, i64, i64 } %old_result, { ptr, i64, i64 } %new_result)"]
+    if return_type == "slice_string_strict":
+        return ["  %same = call i1 @__mlse_slice_string_strict_equal({ ptr, i64, i64 } %old_result, { ptr, i64, i64 } %new_result)"]
     if return_type == "slice_ptr":
         return [
             "  %old_data = extractvalue { ptr, i64, i64 } %old_result, 0",
@@ -1247,6 +1660,12 @@ def build_go_abi_klee_harness(metadata: dict[str, Any], old_symbol: str, new_sym
     extra_runtime_text = go_abi_extra_runtime_ir(metadata)
     setup_text = "\n".join(setup_lines)
     compare_text = "\n".join(compare_lines)
+    if return_type == "void":
+        call_text = f"""  call {ret_decl} @{old_symbol}({args})
+  call {ret_decl} @{new_symbol}({args})"""
+    else:
+        call_text = f"""  %old_result = call {ret_decl} @{old_symbol}({args})
+  %new_result = call {ret_decl} @{new_symbol}({args})"""
     return f"""{globals_text}
 {GO_ABI_RUNTIME_IR}
 {extra_runtime_text}
@@ -1257,8 +1676,7 @@ declare {ret_decl} @{new_symbol}({param_decl})
 define i32 @main() {{
 entry:
 {setup_text}
-  %old_result = call {ret_decl} @{old_symbol}({args})
-  %new_result = call {ret_decl} @{new_symbol}({args})
+{call_text}
 {compare_text}
   br i1 %same, label %ok, label %mismatch
 

@@ -9,5 +9,30 @@
     "old_function": "AddOwners1",
     "new_function": "AddOwners2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "ctx",
+      "type": "*RequestContext"
+    }
+  ],
+  "results": [
+    {
+      "type": "[]string"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "ctx",
+        "type": "opaque_ptr",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "slice_string_strict",
+      "compare": "strict"
+    },
+    "notes": "The bounded model lets BindAndValidate populate one plugin and one owner, while GetByPluginName fails. That exposes nil versus preallocated empty []string."
+  }
 }

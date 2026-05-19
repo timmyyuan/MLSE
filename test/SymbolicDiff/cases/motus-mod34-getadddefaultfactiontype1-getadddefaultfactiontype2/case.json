@@ -9,5 +9,21 @@
     "old_function": "GetAddDefaultFactionType1",
     "new_function": "GetAddDefaultFactionType2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [],
+  "results": [
+    {
+      "type": "bool"
+    },
+    {
+      "type": "error"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [],
+    "return": {
+      "type": "bool_error",
+      "compare": "logical"
+    }
+  }
 }
