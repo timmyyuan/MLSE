@@ -2,10 +2,10 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | 验证中 |
+| 状态 | 已完成 |
 | 关联请求 | 将 Go 基本数据结构实现在简化 runtime 中，避免直接建模或编译 Go runtime |
 | 开始时间 | 2026-05-19 15:30 CST |
-| 结束时间 | 无 |
+| 结束时间 | 2026-05-19 16:06 CST |
 
 ## 背景
 
@@ -31,7 +31,10 @@
 - 2026-05-19 15:56：GitHub Docker/KLEE CI 真实执行中，新增 `mod19` 已判等通过，但 `mod17` 暴露 `runtime.composite.map` 未定义导致的 `external.err` 回归。
 - 2026-05-19 16:02：补回三参数 `runtime.composite.map` map literal stub；撤回通用 `runtime.newobject` 的全局零初始化，只在 `map[string]string` 模型内部用显式 store 初始化 header/key/value，避免把新模型副作用扩散到旧 case。
 - 2026-05-19 16:04：本地通过 `mod17` / `mod19` / `mod27` / `mod28` fake-KLEE 结构检查，以及 supported 等价子集 fake-KLEE 结构检查。
+- 2026-05-19 16:05：本地复验通过 `scripts/test-all.sh`、`scripts/lint.sh`、`git diff --check`。
+- 2026-05-19 16:06：PR #79 新一轮 GitHub Actions 全部通过，包括 `Docker KLEE symbolic-diff smoke`。
 
-## 待更新
+## 结果
 
-- 等待本地主线测试与 PR 上的真实 GitHub Docker/KLEE CI 复验。
+- `motus-mod19-foo1-foo2` 进入 supported KLEE case；真实 Docker/KLEE CI 已验证通过。
+- 保留 bounded runtime 边界：当前 map 模型只覆盖本次引入的 `map[string]string` 可观察副作用和已有 pointer-map stub，不声明完整 Go map 语义。
