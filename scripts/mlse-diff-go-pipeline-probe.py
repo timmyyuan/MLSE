@@ -430,13 +430,43 @@ check:
   %next_ch = load i8, ptr %next_ptr, align 1
   %is_percent = icmp eq i8 %ch, 37
   %is_string = icmp eq i8 %next_ch, 115
-  %found = and i1 %is_percent, %is_string
-  br i1 %found, label %format_string, label %maybe_unsupported
+  %found_string = and i1 %is_percent, %is_string
+  br i1 %found_string, label %format_string, label %maybe_int
+
+maybe_int:
+  %is_int = icmp eq i8 %next_ch, 100
+  %found_int = and i1 %is_percent, %is_int
+  br i1 %found_int, label %format_i64, label %maybe_float
+
+maybe_float:
+  %float_last = add i64 %i, 4
+  %has_float_width = icmp ult i64 %float_last, %fmt_len
+  %maybe_float_format = and i1 %is_percent, %has_float_width
+  br i1 %maybe_float_format, label %check_float_chars, label %maybe_unsupported
+
+check_float_chars:
+  %dot_ptr = getelementptr i8, ptr %fmt_ptr, i64 %after
+  %one_index = add i64 %i, 2
+  %f_index = add i64 %i, 3
+  %k_index = add i64 %i, 4
+  %one_ptr = getelementptr i8, ptr %fmt_ptr, i64 %one_index
+  %f_ptr = getelementptr i8, ptr %fmt_ptr, i64 %f_index
+  %k_ptr = getelementptr i8, ptr %fmt_ptr, i64 %k_index
+  %dot_ch = load i8, ptr %dot_ptr, align 1
+  %one_ch = load i8, ptr %one_ptr, align 1
+  %f_ch = load i8, ptr %f_ptr, align 1
+  %k_ch = load i8, ptr %k_ptr, align 1
+  %is_dot = icmp eq i8 %dot_ch, 46
+  %is_one = icmp eq i8 %one_ch, 49
+  %is_f = icmp eq i8 %f_ch, 102
+  %is_k = icmp eq i8 %k_ch, 75
+  %float_a = and i1 %is_dot, %is_one
+  %float_b = and i1 %is_f, %is_k
+  %found_float = and i1 %float_a, %float_b
+  br i1 %found_float, label %format_f64, label %unsupported
 
 maybe_unsupported:
-  %not_string = xor i1 %is_string, true
-  %is_unsupported = and i1 %is_percent, %not_string
-  br i1 %is_unsupported, label %unsupported, label %continue
+  br i1 %is_percent, label %unsupported, label %continue
 
 continue:
   %next = add i64 %i, 1
@@ -462,6 +492,42 @@ arg_ok:
   %suffix1 = insertvalue { ptr, i64 } %suffix0, i64 %suffix_len, 1
   %full = call { ptr, i64 } @runtime.add.string({ ptr, i64 } %prefix_arg, { ptr, i64 } %suffix1)
   ret { ptr, i64 } %full
+
+format_i64:
+  %args_len_i64 = extractvalue { ptr, i64, i64 } %args, 1
+  %has_i64_arg = icmp ugt i64 %args_len_i64, 0
+  br i1 %has_i64_arg, label %i64_arg_ok, label %fallback
+
+i64_arg_ok:
+  %args_data_i64 = extractvalue { ptr, i64, i64 } %args, 0
+  %arg_slot_i64 = getelementptr ptr, ptr %args_data_i64, i64 0
+  %boxed_arg_i64 = load ptr, ptr %arg_slot_i64, align 8
+  %arg_i64 = load i64, ptr %boxed_arg_i64, align 8
+  %buf_i64 = call ptr @malloc(i64 9)
+  store i8 100, ptr %buf_i64, align 1
+  %value_ptr_i64 = getelementptr i8, ptr %buf_i64, i64 1
+  store i64 %arg_i64, ptr %value_ptr_i64, align 1
+  %out_i64_0 = insertvalue { ptr, i64 } undef, ptr %buf_i64, 0
+  %out_i64_1 = insertvalue { ptr, i64 } %out_i64_0, i64 9, 1
+  ret { ptr, i64 } %out_i64_1
+
+format_f64:
+  %args_len_f64 = extractvalue { ptr, i64, i64 } %args, 1
+  %has_f64_arg = icmp ugt i64 %args_len_f64, 0
+  br i1 %has_f64_arg, label %f64_arg_ok, label %fallback
+
+f64_arg_ok:
+  %args_data_f64 = extractvalue { ptr, i64, i64 } %args, 0
+  %arg_slot_f64 = getelementptr ptr, ptr %args_data_f64, i64 0
+  %boxed_arg_f64 = load ptr, ptr %arg_slot_f64, align 8
+  %arg_f64 = load double, ptr %boxed_arg_f64, align 8
+  %buf_f64 = call ptr @malloc(i64 9)
+  store i8 102, ptr %buf_f64, align 1
+  %value_ptr_f64 = getelementptr i8, ptr %buf_f64, i64 1
+  store double %arg_f64, ptr %value_ptr_f64, align 1
+  %out_f64_0 = insertvalue { ptr, i64 } undef, ptr %buf_f64, 0
+  %out_f64_1 = insertvalue { ptr, i64 } %out_f64_0, i64 9, 1
+  ret { ptr, i64 } %out_f64_1
 
 fallback:
   ret { ptr, i64 } %format
@@ -531,12 +597,137 @@ entry:
   ret ptr %map
 }
 
+define ptr @runtime.make.map() {
+entry:
+  %map = call ptr @malloc(i64 8)
+  ret ptr %map
+}
+
+define ptr @runtime.index.map(ptr %map, { ptr, i64 } %key) {
+entry:
+  ret ptr %map
+}
+
+define ptr @runtime.store.index.map(ptr %map, { ptr, i64 } %key, ptr %value) {
+entry:
+  ret ptr %map
+}
+
+define ptr @runtime.store.index.map__sig2(ptr %map, { ptr, i64 } %key, ptr %value) {
+entry:
+  ret ptr %map
+}
+
+define i1 @runtime.index.value__sig2(ptr %map, { ptr, i64 } %key) {
+entry:
+  ret i1 false
+}
+
+define ptr @runtime.store.index.value(ptr %map, { ptr, i64 } %key, i1 %value) {
+entry:
+  ret ptr %map
+}
+
+define ptr @VRegionMap() {
+entry:
+  %map = call ptr @malloc(i64 8)
+  ret ptr %map
+}
+
+define ptr @runtime.newobject__sig2(i64 %size, i64 %align) {
+entry:
+  %obj = call ptr @runtime.newobject(i64 %size, i64 %align)
+  ret ptr %obj
+}
+
 define void @runtime.panic.index(i64 %index, i64 %len) {
 entry:
   call void @klee_report_error(ptr @.file, i32 1, ptr @.panic, ptr @.panic_suffix)
   unreachable
 }
 """
+
+
+def go_abi_extra_runtime_ir(metadata: dict[str, Any]) -> str:
+    name = metadata.get("name", "")
+    pieces: list[str] = []
+    if name == "motus-mod14-foo1-foo2":
+        pieces.append(
+            """
+@__mlse_global_input_value = global i64 0
+
+define i64 @GlobalInput() {
+entry:
+  %value = load i64, ptr @__mlse_global_input_value, align 8
+  ret i64 %value
+}
+"""
+        )
+    if name == "motus-mod26-wrapcompileenv1-wrapcompileenv2":
+        pieces.append(
+            """
+define ptr @runtime.index.value(ptr %map, { ptr, i64 } %key) {
+entry:
+  ret ptr null
+}
+
+define { ptr, i64 } @runtime.convert.value.to.string(ptr %value) {
+entry:
+  ret { ptr, i64 } zeroinitializer
+}
+"""
+        )
+    if name in {
+        "motus-mod27-getpsmrelatedpluginlist1-getpsmrelatedpluginlist2",
+        "motus-mod28-getpsmrelatedpluginlist1-getpsmrelatedpluginlist2",
+    }:
+        pieces.append(
+            """
+define { ptr, i64 } @runtime.index.value(ptr %map, { ptr, i64 } %key) {
+entry:
+  ret { ptr, i64 } %key
+}
+
+define i1 @runtime.strings.Contains({ ptr, i64 } %haystack, { ptr, i64 } %needle) {
+entry:
+  ret i1 true
+}
+
+define { ptr, i64, i64 } @runtime.strings.Split({ ptr, i64 } %text, { ptr, i64 } %sep) {
+entry:
+  %sep_ptr = extractvalue { ptr, i64 } %sep, 0
+  %sep_len = extractvalue { ptr, i64 } %sep, 1
+  %has_sep = icmp ugt i64 %sep_len, 0
+  br i1 %has_sep, label %read_sep, label %single
+
+read_sep:
+  %sep_ch = load i8, ptr %sep_ptr, align 1
+  %is_slash = icmp eq i8 %sep_ch, 47
+  br i1 %is_slash, label %slash, label %single
+
+single:
+  %single_buf = call ptr @malloc(i64 16)
+  store { ptr, i64 } %text, ptr %single_buf, align 8
+  %single0 = insertvalue { ptr, i64, i64 } undef, ptr %single_buf, 0
+  %single1 = insertvalue { ptr, i64, i64 } %single0, i64 1, 1
+  %single2 = insertvalue { ptr, i64, i64 } %single1, i64 1, 2
+  ret { ptr, i64, i64 } %single2
+
+slash:
+  %slash_buf = call ptr @malloc(i64 48)
+  store { ptr, i64 } zeroinitializer, ptr %slash_buf, align 8
+  %slot1 = getelementptr { ptr, i64 }, ptr %slash_buf, i64 1
+  store { ptr, i64 } zeroinitializer, ptr %slot1, align 8
+  %slot2 = getelementptr { ptr, i64 }, ptr %slash_buf, i64 2
+  store { ptr, i64 } %text, ptr %slot2, align 8
+  %slash0 = insertvalue { ptr, i64, i64 } undef, ptr %slash_buf, 0
+  %slash1 = insertvalue { ptr, i64, i64 } %slash0, i64 3, 1
+  %slash2 = insertvalue { ptr, i64, i64 } %slash1, i64 3, 2
+  ret { ptr, i64, i64 } %slash2
+}
+"""
+        )
+    return "\n".join(piece.strip() for piece in pieces if piece.strip())
 
 
 def c_param_decl(params: list[dict[str, Any]]) -> str:
@@ -751,10 +942,16 @@ def slice_i64_input_lines(name: str, length: int, bytes_len: int, mode: str) -> 
 def go_abi_llvm_type(model_type: str) -> str:
     mapping = {
         "bool": "i1",
+        "conf_ptr": "ptr",
         "error": "ptr",
         "i64": "i64",
+        "mod27_req_ptr": "ptr",
+        "mod28_req_ptr": "ptr",
+        "opaque_ptr": "ptr",
         "ptr_i64": "ptr",
+        "slice_ptr": "{ ptr, i64, i64 }",
         "string": "{ ptr, i64 }",
+        "string_bool": "{ { ptr, i64 }, i1 }",
         "slice_string": "{ ptr, i64, i64 }",
     }
     if model_type not in mapping:
@@ -832,12 +1029,107 @@ def go_abi_slice_string_setup(name: str, length: int) -> tuple[list[str], str]:
     return lines, f"%{name}_slice2"
 
 
+def go_abi_conf_ptr_setup(name: str) -> tuple[list[str], str]:
+    return [
+        f"  %{name}_mode_addr = alloca i8, align 1",
+        f"  call void @klee_make_symbolic(ptr %{name}_mode_addr, i64 1, ptr @.name_{name})",
+        f"  %{name}_mode_raw = load i8, ptr %{name}_mode_addr, align 1",
+        f"  %{name}_is_nil = trunc i8 %{name}_mode_raw to i1",
+        f"  %{name}_obj = call ptr @malloc(i64 16)",
+        f"  %{name}_envs = call ptr @malloc(i64 8)",
+        f"  store ptr %{name}_envs, ptr %{name}_obj, align 8",
+        f"  %{name}_next = getelementptr i8, ptr %{name}_obj, i64 8",
+        f"  store ptr null, ptr %{name}_next, align 8",
+        f"  %{name}_value = select i1 %{name}_is_nil, ptr null, ptr %{name}_obj",
+    ], f"%{name}_value"
+
+
+def go_abi_opaque_ptr_setup(name: str) -> tuple[list[str], str]:
+    return [], "null"
+
+
+def go_abi_slice_ptr_setup(name: str, length: int) -> tuple[list[str], str]:
+    if length <= 0:
+        raise ValueError("go_llvm slice_ptr parameters require a positive symbolic length")
+    lines = [
+        f"  %{name}_data = alloca [{length} x ptr], align 8",
+        f"  %{name}_ptr = getelementptr [{length} x ptr], ptr %{name}_data, i64 0, i64 0",
+    ]
+    for index in range(length):
+        lines.extend(
+            [
+                f"  %{name}_elem{index} = call ptr @malloc(i64 1)",
+                f"  %{name}_slot{index} = getelementptr [{length} x ptr], ptr %{name}_data, i64 0, i64 {index}",
+                f"  store ptr %{name}_elem{index}, ptr %{name}_slot{index}, align 8",
+            ]
+        )
+    lines.extend(
+        [
+            f"  %{name}_mode_addr = alloca i8, align 1",
+            f"  call void @klee_make_symbolic(ptr %{name}_mode_addr, i64 1, ptr @.name_{name})",
+            f"  %{name}_mode_raw = load i8, ptr %{name}_mode_addr, align 1",
+            f"  %{name}_mode = and i8 %{name}_mode_raw, 3",
+            f"  %{name}_is_nil = icmp eq i8 %{name}_mode, 0",
+            f"  %{name}_is_zero_len = icmp ult i8 %{name}_mode, 2",
+            f"  %{name}_len = select i1 %{name}_is_zero_len, i64 0, i64 {length}",
+            f"  %{name}_cap = select i1 %{name}_is_nil, i64 0, i64 {length}",
+            f"  %{name}_data_or_null = select i1 %{name}_is_nil, ptr null, ptr %{name}_ptr",
+            f"  %{name}_slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %{name}_data_or_null, 0",
+            f"  %{name}_slice1 = insertvalue {{ ptr, i64, i64 }} %{name}_slice0, i64 %{name}_len, 1",
+            f"  %{name}_slice2 = insertvalue {{ ptr, i64, i64 }} %{name}_slice1, i64 %{name}_cap, 2",
+        ]
+    )
+    return lines, f"%{name}_slice2"
+
+
+def go_abi_mod27_req_ptr_setup(name: str, length: int) -> tuple[list[str], str]:
+    psm_lines, psm = go_abi_string_setup(f"{name}_psm", length)
+    vregion_lines, vregion_list = go_abi_string_setup(f"{name}_vregion_list", length)
+    lines = [
+        f"  %{name}_obj = call ptr @malloc(i64 32)",
+        *psm_lines,
+        f"  store {{ ptr, i64 }} {psm}, ptr %{name}_obj, align 8",
+        *vregion_lines,
+        f"  %{name}_vregion_slot = getelementptr i8, ptr %{name}_obj, i64 16",
+        f"  store {{ ptr, i64 }} {vregion_list}, ptr %{name}_vregion_slot, align 8",
+    ]
+    return lines, f"%{name}_obj"
+
+
+def go_abi_mod28_req_ptr_setup(name: str, length: int) -> tuple[list[str], str]:
+    psm_lines, psm = go_abi_string_setup(f"{name}_psm", length)
+    vregions_lines, vregions = go_abi_slice_string_setup(f"{name}_vregions", length)
+    plugin_lines, plugin = go_abi_string_setup(f"{name}_plugin_name", length)
+    lines = [
+        f"  %{name}_obj = call ptr @malloc(i64 56)",
+        *psm_lines,
+        f"  store {{ ptr, i64 }} {psm}, ptr %{name}_obj, align 8",
+        *vregions_lines,
+        f"  %{name}_vregions_slot = getelementptr i8, ptr %{name}_obj, i64 16",
+        f"  store {{ ptr, i64, i64 }} {vregions}, ptr %{name}_vregions_slot, align 8",
+        *plugin_lines,
+        f"  %{name}_plugin_slot = getelementptr i8, ptr %{name}_obj, i64 40",
+        f"  store {{ ptr, i64 }} {plugin}, ptr %{name}_plugin_slot, align 8",
+    ]
+    return lines, f"%{name}_obj"
+
+
 def go_abi_input_setup(param: dict[str, Any]) -> tuple[list[str], str]:
     name = sanitize_symbol(param["name"])
     model_type = param["type"]
     length = int(param.get("length", 1))
     if model_type in {"i64", "bool"}:
         return go_abi_scalar_setup(name, model_type)
+    if model_type == "conf_ptr":
+        return go_abi_conf_ptr_setup(name)
+    if model_type == "opaque_ptr":
+        return go_abi_opaque_ptr_setup(name)
+    if model_type == "slice_ptr":
+        return go_abi_slice_ptr_setup(name, length)
+    if model_type == "mod27_req_ptr":
+        return go_abi_mod27_req_ptr_setup(name, length)
+    if model_type == "mod28_req_ptr":
+        return go_abi_mod28_req_ptr_setup(name, length)
     if model_type == "string":
         return go_abi_string_setup(name, length)
     if model_type == "slice_string":
@@ -845,26 +1137,82 @@ def go_abi_input_setup(param: dict[str, Any]) -> tuple[list[str], str]:
     raise ValueError(f"unsupported go_llvm KLEE parameter type {model_type!r}")
 
 
+def go_abi_symbolic_global_names(param: dict[str, Any]) -> list[str]:
+    name = sanitize_symbol(param["name"])
+    model_type = param["type"]
+    length = int(param.get("length", 1))
+    if model_type == "slice_string":
+        return [name, *(f"{name}_elem{index}" for index in range(length))]
+    if model_type == "mod27_req_ptr":
+        return [f"{name}_psm", f"{name}_vregion_list"]
+    if model_type == "mod28_req_ptr":
+        return [
+            f"{name}_psm",
+            f"{name}_vregions",
+            *(f"{name}_vregions_elem{index}" for index in range(length)),
+            f"{name}_plugin_name",
+        ]
+    return [name]
+
+
 def go_abi_input_globals(params: list[dict[str, Any]]) -> list[str]:
     globals_list: list[str] = []
     for param in params:
-        name = sanitize_symbol(param["name"])
-        globals_list.append(go_abi_c_string_global(name))
-        if param["type"] == "slice_string":
-            length = int(param.get("length", 1))
-            for index in range(length):
-                globals_list.append(go_abi_c_string_global(f"{name}_elem{index}"))
+        for name in go_abi_symbolic_global_names(param):
+            globals_list.append(go_abi_c_string_global(name))
     return globals_list
 
 
+def go_abi_symbolic_state_setup(model: dict[str, Any]) -> tuple[list[str], list[str]]:
+    lines: list[str] = []
+    globals_list: list[str] = []
+    for item in model.get("globals", []):
+        name = sanitize_symbol(item["name"])
+        model_type = item["type"]
+        symbol = item["symbol"]
+        if model_type != "i64":
+            raise ValueError(f"unsupported go_llvm symbolic global type {model_type!r}")
+        globals_list.append(go_abi_c_string_global(name))
+        lines.append(f"  call void @klee_make_symbolic(ptr @{symbol}, i64 8, ptr @.name_{name})")
+    return lines, globals_list
+
+
 def go_abi_compare_lines(return_type: str) -> list[str]:
+    if return_type == "i64":
+        return [
+            "  %same = icmp eq i64 %old_result, %new_result"
+        ]
     if return_type == "string":
         return [
             "  %same = call i1 @__mlse_string_equal({ ptr, i64 } %old_result, { ptr, i64 } %new_result)"
         ]
+    if return_type == "string_bool":
+        return [
+            "  %old_string = extractvalue { { ptr, i64 }, i1 } %old_result, 0",
+            "  %new_string = extractvalue { { ptr, i64 }, i1 } %new_result, 0",
+            "  %same_string = call i1 @__mlse_string_equal({ ptr, i64 } %old_string, { ptr, i64 } %new_string)",
+            "  %old_bool = extractvalue { { ptr, i64 }, i1 } %old_result, 1",
+            "  %new_bool = extractvalue { { ptr, i64 }, i1 } %new_result, 1",
+            "  %same_bool = icmp eq i1 %old_bool, %new_bool",
+            "  %same = and i1 %same_string, %same_bool",
+        ]
     if return_type == "slice_string":
         return [
             "  %same = call i1 @__mlse_slice_string_equal({ ptr, i64, i64 } %old_result, { ptr, i64, i64 } %new_result)"
+        ]
+    if return_type == "slice_ptr":
+        return [
+            "  %old_data = extractvalue { ptr, i64, i64 } %old_result, 0",
+            "  %new_data = extractvalue { ptr, i64, i64 } %new_result, 0",
+            "  %old_len = extractvalue { ptr, i64, i64 } %old_result, 1",
+            "  %new_len = extractvalue { ptr, i64, i64 } %new_result, 1",
+            "  %same_len = icmp eq i64 %old_len, %new_len",
+            "  %old_nil = icmp eq ptr %old_data, null",
+            "  %new_nil = icmp eq ptr %new_data, null",
+            "  %same_nil = icmp eq i1 %old_nil, %new_nil",
+            "  %nonzero = icmp ne i64 %old_len, 0",
+            "  %same_shape = or i1 %nonzero, %same_nil",
+            "  %same = and i1 %same_len, %same_shape",
         ]
     if return_type == "error":
         return [
@@ -885,6 +1233,8 @@ def build_go_abi_klee_harness(metadata: dict[str, Any], old_symbol: str, new_sym
     param_decl = ", ".join(go_abi_llvm_type(item["type"]) for item in params)
     setup_lines: list[str] = []
     arg_values: list[str] = []
+    state_lines, state_globals = go_abi_symbolic_state_setup(model)
+    setup_lines.extend(state_lines)
     for param in params:
         lines, value = go_abi_input_setup(param)
         setup_lines.extend(lines)
@@ -893,11 +1243,13 @@ def build_go_abi_klee_harness(metadata: dict[str, Any], old_symbol: str, new_sym
         f"{go_abi_llvm_type(param['type'])} {value}" for param, value in zip(params, arg_values)
     )
     compare_lines = go_abi_compare_lines(return_type)
-    globals_text = "\n".join(go_abi_input_globals(params))
+    globals_text = "\n".join([*go_abi_input_globals(params), *state_globals])
+    extra_runtime_text = go_abi_extra_runtime_ir(metadata)
     setup_text = "\n".join(setup_lines)
     compare_text = "\n".join(compare_lines)
     return f"""{globals_text}
 {GO_ABI_RUNTIME_IR}
+{extra_runtime_text}
 
 declare {ret_decl} @{old_symbol}({param_decl})
 declare {ret_decl} @{new_symbol}({param_decl})

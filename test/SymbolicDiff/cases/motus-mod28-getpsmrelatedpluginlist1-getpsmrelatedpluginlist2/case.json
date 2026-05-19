@@ -9,5 +9,38 @@
     "old_function": "GetPsmRelatedPluginList1",
     "new_function": "GetPsmRelatedPluginList2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "ctx",
+      "type": "context.Context"
+    },
+    {
+      "name": "req",
+      "type": "*GetPSMRelatedPluginListReq"
+    }
+  ],
+  "results": [
+    {
+      "type": "int64"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "ctx",
+        "type": "opaque_ptr",
+        "length": 1
+      },
+      {
+        "name": "req",
+        "type": "mod28_req_ptr",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "i64",
+      "compare": "logical"
+    }
+  }
 }

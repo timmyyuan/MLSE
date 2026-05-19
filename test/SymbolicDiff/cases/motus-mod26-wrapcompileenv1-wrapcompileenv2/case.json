@@ -9,5 +9,41 @@
     "old_function": "WrapCompileEnv1",
     "new_function": "WrapCompileEnv2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "cfg",
+      "type": "*Conf"
+    },
+    {
+      "name": "key",
+      "type": "string"
+    }
+  ],
+  "results": [
+    {
+      "type": "string"
+    },
+    {
+      "type": "bool"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "cfg",
+        "type": "conf_ptr",
+        "length": 1
+      },
+      {
+        "name": "key",
+        "type": "string",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "string_bool",
+      "compare": "logical"
+    }
+  }
 }

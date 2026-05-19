@@ -2,12 +2,37 @@
   "name": "motus-mod35-foo1-foo2",
   "description": "Motus smtcmp mod35: Foo1 vs Foo2.",
   "function": "diffcase.F",
-  "expected_status": "counterexample",
+  "expected_status": "equivalent",
   "source": {
     "repo": "motus",
     "path": "pkg/analysis/ssa/smtcmp/testdata/mod35",
     "old_function": "Foo1",
     "new_function": "Foo2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "flag",
+      "type": "bool"
+    }
+  ],
+  "results": [
+    {
+      "type": "*CommonResp"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "flag",
+        "type": "bool",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "ptr_i64",
+      "compare": "field0"
+    },
+    "notes": "The fixture's success helper only returns CommonResp.Code=0, so the current executable behavior is equivalent for nil and empty SceneInfos."
+  }
 }

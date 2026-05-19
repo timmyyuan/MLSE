@@ -9,5 +9,29 @@
     "old_function": "Do2Bo1",
     "new_function": "Do2Bo2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "pl",
+      "type": "PlaybookList"
+    }
+  ],
+  "results": [
+    {
+      "type": "[]*PlaybookPms"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "pl",
+        "type": "slice_ptr",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "slice_ptr",
+      "compare": "shape"
+    }
+  }
 }

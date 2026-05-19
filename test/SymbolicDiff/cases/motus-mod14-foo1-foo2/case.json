@@ -9,5 +9,36 @@
     "old_function": "foo1",
     "new_function": "foo2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "x",
+      "type": "int"
+    }
+  ],
+  "results": [
+    {
+      "type": "int"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "x",
+        "type": "i64",
+        "length": 1
+      }
+    ],
+    "globals": [
+      {
+        "name": "GlobalInput",
+        "type": "i64",
+        "symbol": "__mlse_global_input_value"
+      }
+    ],
+    "return": {
+      "type": "i64",
+      "compare": "logical"
+    }
+  }
 }

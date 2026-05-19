@@ -584,7 +584,7 @@ m := make(map[string]bool)
 
 ### `fmt.Sprintf` 与 `...any`
 
-fixture：`internal/gofrontend/testdata/string_call.go`
+fixture：`internal/gofrontend/testdata/string_call.go`、`internal/gofrontend/testdata/variadic_any_call.go`、`internal/gofrontend/testdata/direct_any_arg_box.go`
 
 变化前：
 
@@ -603,6 +603,8 @@ return fmt.Sprintf("hello %s", name)
 go.store %any5, %slot7 : !go.named<"any">, !go.ptr<!go.named<"any">>
 %call8 = func.call @runtime.fmt.Sprintf(%str2, %args4) : (!go.string, !go.slice<!go.named<"any">>) -> !go.string
 ```
+
+这条路径不只服务 `fmt.*` model。普通函数调用现在也会按 `go/types` 签名 hint 做实参 coercion：`any` 形参会先经 `runtime.any.box.*` 装箱，用户自定义 `args ...any` 会在 call site 打包成 `!go.slice<!go.named<"any">>`，再用三实参形式调用 callee，避免 `mlse-opt` round-trip 阶段看到 variadic 展开后的实参个数不匹配。
 
 ## Methods And Function Values
 

@@ -124,7 +124,7 @@ module attributes {go.scope_table = [...]} {
 - 非捕获 `FuncLit` 当前会统一命名成 `enclosing.__litN`
 - package selector value 当前会优先按 import path 产出稳定符号，而不是继续依赖源码里的 alias 名
 - package selector 如果经 `go/types` 判定为 typed const，且值能安全落到当前 formal 宽度，当前会直接 materialize 成 `arith.constant` / `go.string_constant`，而不是继续走 helper call；超出当前宽度的 case 仍会保留 helper 路径
-- 针对标准库 selector call 的建模当前已统一收口到独立的 stdlib/runtime 模块里；`fmt.Sprintf` / `fmt.Sprint` / `fmt.Errorf` / `fmt.Print*` 当前会优先 lower 到固定 ABI 的 `runtime.fmt.*`，并把 `...any` 显式打包成 `!go.slice<!go.named<"any">>` 后经 `runtime.any.box.*` 装箱；`strings.Contains` / `Split` / `ReplaceAll` / `Trim*` / `ToLower` / `ToUpper` 以及 `errors.New` 这类 selector call 也会优先收成稳定的 `runtime.*` wrapper，而不再按 call-site 签名分裂成 extern facade
+- 针对标准库 selector call 的建模当前已统一收口到独立的 stdlib/runtime 模块里；`fmt.Sprintf` / `fmt.Sprint` / `fmt.Errorf` / `fmt.Print*` 当前会优先 lower 到固定 ABI 的 `runtime.fmt.*`，并把 `...any` 显式打包成 `!go.slice<!go.named<"any">>` 后经 `runtime.any.box.*` 装箱；同样的签名感知实参 coercion 也用于普通函数调用，用户自定义 `func(..., args ...any)` 会在 call site 打包成 `[]any`，普通 `any` 形参会触发必要的 `runtime.any.box.*`；`strings.Contains` / `Split` / `ReplaceAll` / `Trim*` / `ToLower` / `ToUpper` 以及 `errors.New` 这类 selector call 也会优先收成稳定的 `runtime.*` wrapper，而不再按 call-site 签名分裂成 extern facade
 - `CompositeLit` 当前至少已经覆盖 typed helper 字面量和空 slice literal；因此不再统一落回 `go.todo_value "CompositeLit"`
 - `&T{Field: v}` 和 `new(T)` 这类静态布局已知的 heap 分配，当前会优先收成 `runtime.newobject(size, align)`；其中 `&T{Field: v}` 还会继续接 `go.field_addr` + `go.store` 初始化字段，不再退回带完整类型后缀的 `runtime.new.*` helper 名
 - 多返回值函数上的 returning-`if` 当前也已经开始直接 lower 到多结果 `scf.if`

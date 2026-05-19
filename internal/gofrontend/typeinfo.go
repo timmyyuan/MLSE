@@ -608,8 +608,9 @@ func formalFuncSigFromGoTypes(ty types.Type, module *formalModuleContext) (forma
 		return formalFuncSig{}, false
 	}
 	return formalFuncSig{
-		params:  formalTupleTypes(sig.Params(), module),
-		results: formalTupleTypes(sig.Results(), module),
+		params:   formalTupleTypes(sig.Params(), module),
+		results:  formalTupleTypes(sig.Results(), module),
+		variadic: sig.Variadic(),
 	}, true
 }
 

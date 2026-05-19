@@ -25,8 +25,9 @@ func formalFuncSigFromType(fnType *ast.FuncType, module *formalModuleContext) fo
 		return formalFuncSig{}
 	}
 	return formalFuncSig{
-		params:  emitFieldTypes(fnType.Params, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
-		results: emitFieldTypes(fnType.Results, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+		params:   emitFieldTypes(fnType.Params, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+		results:  emitFieldTypes(fnType.Results, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+		variadic: formalFuncTypeIsVariadic(fnType),
 	}
 }
 
@@ -35,9 +36,18 @@ func formalFuncSigFromDecl(fn *ast.FuncDecl, module *formalModuleContext) formal
 		return formalFuncSig{}
 	}
 	return formalFuncSig{
-		params:  emitFieldTypes(formalJoinFieldLists(fn.Recv, fn.Type.Params), func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
-		results: emitFieldTypes(fn.Type.Results, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+		params:   emitFieldTypes(formalJoinFieldLists(fn.Recv, fn.Type.Params), func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+		results:  emitFieldTypes(fn.Type.Results, func(expr ast.Expr) string { return formalTypeExprToMLIR(expr, module) }),
+		variadic: formalFuncTypeIsVariadic(fn.Type),
 	}
+}
+
+func formalFuncTypeIsVariadic(fnType *ast.FuncType) bool {
+	if fnType == nil || fnType.Params == nil || len(fnType.Params.List) == 0 {
+		return false
+	}
+	_, ok := fnType.Params.List[len(fnType.Params.List)-1].Type.(*ast.Ellipsis)
+	return ok
 }
 
 func emitFormalFuncLitExpr(lit *ast.FuncLit, hintedTy string, env *formalEnv) (string, string, string) {
@@ -97,8 +107,9 @@ func emitFormalImmediateCapturedFuncLitCall(call *ast.CallExpr, env *formalEnv) 
 	}
 
 	symbol := reserveFormalFuncLitSymbol(env.module, formalFuncSig{
-		params:  append(append([]string(nil), captureTys...), sig.params...),
-		results: append([]string(nil), sig.results...),
+		params:   append(append([]string(nil), captureTys...), sig.params...),
+		results:  append([]string(nil), sig.results...),
+		variadic: sig.variadic,
 	}, env.currentFunc)
 	addFormalGeneratedFunc(env.module, emitFormalCapturedFuncLitBody(symbol, lit, info.captures, env.module))
 
@@ -494,10 +505,63 @@ func emitFormalCallOperandsWithHints(args []ast.Expr, hints []string, env *forma
 		}
 		value, ty, prelude := emitFormalExpr(arg, hint, env)
 		buf.WriteString(prelude)
+		if hint != "" {
+			if coercedValue, coercedTy, coercedPrelude, ok := emitFormalCoerceValue(value, ty, hint, env); ok {
+				value = coercedValue
+				ty = coercedTy
+				buf.WriteString(coercedPrelude)
+			}
+		}
 		values = append(values, value)
 		types = append(types, ty)
 	}
 	return values, types, buf.String()
+}
+
+func emitFormalCallOperandsForSig(call *ast.CallExpr, sig formalFuncSig, env *formalEnv) ([]string, []string, string, bool) {
+	if !sig.variadic {
+		if len(sig.params) == len(call.Args) {
+			args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args, sig.params, env)
+			return args, argTys, prelude, true
+		}
+		args, argTys, prelude := emitFormalCallOperands(call.Args, env)
+		return args, argTys, prelude, true
+	}
+	if len(sig.params) == 0 {
+		args, argTys, prelude := emitFormalCallOperands(call.Args, env)
+		return args, argTys, prelude, true
+	}
+
+	fixed := len(sig.params) - 1
+	if len(call.Args) < fixed {
+		args, argTys, prelude := emitFormalCallOperands(call.Args, env)
+		return args, argTys, prelude, true
+	}
+
+	if call.Ellipsis != token.NoPos {
+		hints := append([]string(nil), sig.params[:fixed]...)
+		if len(call.Args) > fixed {
+			hints = append(hints, sig.params[len(sig.params)-1])
+		}
+		args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args, hints, env)
+		return args, argTys, prelude, true
+	}
+
+	args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args[:fixed], sig.params[:fixed], env)
+	var buf strings.Builder
+	buf.WriteString(prelude)
+	variadicTy := normalizeFormalType(sig.params[len(sig.params)-1])
+	if variadicTy != formalAnySliceType() {
+		return nil, nil, "", false
+	}
+	packed, packedTy, packedPrelude, ok := emitFormalRuntimePackAnyArgs(call.Args[fixed:], env)
+	if !ok {
+		return nil, nil, "", false
+	}
+	buf.WriteString(packedPrelude)
+	args = append(args, packed)
+	argTys = append(argTys, packedTy)
+	return args, argTys, buf.String(), true
 }
 
 func formalDirectCallSymbol(expr ast.Expr, argTys []string, resultTys []string, env *formalEnv) (string, bool) {
@@ -587,13 +651,23 @@ func emitFormalCallExpr(call *ast.CallExpr, hintedTy string, env *formalEnv) (st
 	}
 
 	argHints := []string(nil)
-	if sig, ok := formalExprFuncSig(call.Fun, env); ok && len(sig.params) == len(call.Args) {
+	sig, hasSig := formalExprFuncSig(call.Fun, env)
+	if hasSig && !sig.variadic && len(sig.params) == len(call.Args) {
 		argHints = sig.params
 	}
 	if value, ty, prelude, ok := emitFormalMethodCallExpr(call, hintedTy, env, argHints); ok {
 		return value, ty, prelude
 	}
-	args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args, argHints, env)
+	args, argTys, prelude := []string(nil), []string(nil), ""
+	if hasSig {
+		var ok bool
+		args, argTys, prelude, ok = emitFormalCallOperandsForSig(call, sig, env)
+		if !ok {
+			return emitFormalTodoValue("variadic_call", normalizeFormalType(hintedTy), env)
+		}
+	} else {
+		args, argTys, prelude = emitFormalCallOperandsWithHints(call.Args, argHints, env)
+	}
 	var buf strings.Builder
 	buf.WriteString(prelude)
 
@@ -606,8 +680,7 @@ func emitFormalCallExpr(call *ast.CallExpr, hintedTy string, env *formalEnv) (st
 		return coercedValue, coercedTy, buf.String()
 	}
 
-	sig, ok := formalExprFuncSig(call.Fun, env)
-	if !ok {
+	if !hasSig {
 		return emitFormalTodoValue("indirect_call", normalizeFormalType(hintedTy), env)
 	}
 	if len(sig.results) > 1 {
@@ -661,18 +734,28 @@ func emitFormalCallStmt(call *ast.CallExpr, env *formalEnv) (string, bool) {
 		return text, true
 	}
 	argHints := []string(nil)
-	if sig, ok := formalExprFuncSig(call.Fun, env); ok && len(sig.params) == len(call.Args) {
+	sig, hasSig := formalExprFuncSig(call.Fun, env)
+	if hasSig && !sig.variadic && len(sig.params) == len(call.Args) {
 		argHints = sig.params
 	}
 	if text, ok := emitFormalMethodCallStmt(call, env, argHints); ok {
 		return text, true
 	}
-	args, argTys, prelude := emitFormalCallOperandsWithHints(call.Args, argHints, env)
+	args, argTys, prelude := []string(nil), []string(nil), ""
+	if hasSig {
+		var ok bool
+		args, argTys, prelude, ok = emitFormalCallOperandsForSig(call, sig, env)
+		if !ok {
+			return emitFormalLinef(call, env, "    go.todo %q", "variadic_call_stmt"), true
+		}
+	} else {
+		args, argTys, prelude = emitFormalCallOperandsWithHints(call.Args, argHints, env)
+	}
 	var buf strings.Builder
 	buf.WriteString(prelude)
 
 	resultTys := []string(nil)
-	if sig, ok := formalExprFuncSig(call.Fun, env); ok {
+	if hasSig {
 		resultTys = append([]string(nil), sig.results...)
 	} else {
 		resultTy := inferFormalCallResultType(call, "", env)
@@ -701,8 +784,7 @@ func emitFormalCallStmt(call *ast.CallExpr, env *formalEnv) (string, bool) {
 		return buf.String(), true
 	}
 
-	sig, ok := formalExprFuncSig(call.Fun, env)
-	if !ok {
+	if !hasSig {
 		return emitFormalLinef(call, env, "    go.todo %q", "indirect_call_stmt"), true
 	}
 	calleeTy := formatFormalFuncType(sig.params, sig.results)
