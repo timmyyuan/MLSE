@@ -10,7 +10,7 @@
 | 关联记录 | [2026-05-19-mlse-diff-go-runtime-map-1530.md](entries/2026-05-19-mlse-diff-go-runtime-map-1530.md) |
 | 开始时间 | 2026-05-19 15:30 CST |
 | 最后更新 | 2026-05-19 |
-| 交接备注 | 本地检查已通过，正在提交 PR 并等待 GitHub Docker/KLEE CI 验证。 |
+| 交接备注 | PR Docker/KLEE CI 首轮发现 mod17 runtime stub 回归；已修复并重新进入本地验证。 |
 
 ## 状态说明
 

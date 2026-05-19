@@ -13,7 +13,6 @@ GO_ABI_RUNTIME_IR = """@.file = private unnamed_addr constant [5 x i8] c"mlse\\0
 declare void @klee_make_symbolic(ptr, i64, ptr)
 declare void @klee_report_error(ptr, i32, ptr, ptr)
 declare ptr @malloc(i64)
-declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 
 define i1 @__mlse_string_equal({ ptr, i64 } %a, { ptr, i64 } %b) {
 entry:
@@ -410,8 +409,13 @@ entry:
   %empty = icmp eq i64 %size, 0
   %alloc_len = select i1 %empty, i64 1, i64 %size
   %obj = call ptr @malloc(i64 %alloc_len)
-  call void @llvm.memset.p0.i64(ptr %obj, i8 0, i64 %alloc_len, i1 false)
   ret ptr %obj
+}
+
+define ptr @runtime.composite.map({ ptr, i64 } %first, { ptr, i64 } %second, { ptr, i64 } %third) {
+entry:
+  %map = call ptr @malloc(i64 8)
+  ret ptr %map
 }
 
 define ptr @runtime.newobject__sig2(i64 %size, i64 %align) {
@@ -492,12 +496,6 @@ entry:
 
 
 GO_ABI_SIMPLE_PTR_MAP_RUNTIME_IR = """
-define ptr @runtime.composite.map() {
-entry:
-  %map = call ptr @malloc(i64 8)
-  ret ptr %map
-}
-
 define ptr @runtime.make.map() {
 entry:
   %map = call ptr @malloc(i64 8)
@@ -550,7 +548,13 @@ entry:
 define ptr @__mlse_map_string_string_new() {
 entry:
   %map = call ptr @malloc(i64 48)
-  call void @llvm.memset.p0.i64(ptr %map, i8 0, i64 48, i1 false)
+  store i64 0, ptr %map, align 8
+  %present_slot = getelementptr i8, ptr %map, i64 8
+  store i8 0, ptr %present_slot, align 1
+  %key_slot = getelementptr i8, ptr %map, i64 16
+  store { ptr, i64 } zeroinitializer, ptr %key_slot, align 8
+  %value_slot = getelementptr i8, ptr %map, i64 32
+  store { ptr, i64 } zeroinitializer, ptr %value_slot, align 8
   ret ptr %map
 }
 

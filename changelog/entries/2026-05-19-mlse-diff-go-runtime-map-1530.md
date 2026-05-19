@@ -28,7 +28,10 @@
 - 2026-05-19 15:44：同步更新仓库 README / dev setup，以及 Obsidian `mlse设计/02-GoIR` 的构建和测试说明。
 - 2026-05-19 15:44：本地通过 `python3 -m py_compile ...`、`python3 scripts/mlse-diff-smoke.py`、`go test ./cmd/... ./internal/...`、`staticcheck ./cmd/... ./internal/...`、`scripts/test-all.sh`、`scripts/lint.sh`。
 - 2026-05-19 15:44：进入 PR / GitHub CI 验证阶段。
+- 2026-05-19 15:56：GitHub Docker/KLEE CI 真实执行中，新增 `mod19` 已判等通过，但 `mod17` 暴露 `runtime.composite.map` 未定义导致的 `external.err` 回归。
+- 2026-05-19 16:02：补回三参数 `runtime.composite.map` map literal stub；撤回通用 `runtime.newobject` 的全局零初始化，只在 `map[string]string` 模型内部用显式 store 初始化 header/key/value，避免把新模型副作用扩散到旧 case。
+- 2026-05-19 16:04：本地通过 `mod17` / `mod19` / `mod27` / `mod28` fake-KLEE 结构检查，以及 supported 等价子集 fake-KLEE 结构检查。
 
 ## 待更新
 
-- 等待 PR 上的真实 GitHub Docker/KLEE CI 验证 `mod19`。
+- 等待本地主线测试与 PR 上的真实 GitHub Docker/KLEE CI 复验。
