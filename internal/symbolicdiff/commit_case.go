@@ -564,6 +564,21 @@ func attachKLEEModel(metadata *caseMetadata, sig signatureInfo, sliceLength int)
 		}
 		return "klee_model:slice_i64"
 	}
+	if goLLVMModelSupported(sig) {
+		model := &kleeModel{
+			ABI:    "go_llvm",
+			Return: kleeModelReturn{Type: goKLEEType(sig.Results[0]), Compare: "logical"},
+		}
+		for _, param := range sig.Params {
+			model.Params = append(model.Params, kleeModelParam{
+				Name:   param.Name,
+				Type:   goKLEEType(param.Type),
+				Length: sliceLength,
+			})
+		}
+		metadata.KLEEModel = model
+		return "klee_model:go_llvm"
+	}
 	metadata.ExpectedBlocker = "klee_model_unavailable"
 	return "unsupported"
 }
@@ -583,6 +598,51 @@ func scalarModelSupported(sig signatureInfo) bool {
 func sliceI64ModelSupported(sig signatureInfo) bool {
 	return len(sig.Params) == 1 && sig.Params[0].Type == "[]int" &&
 		len(sig.Results) == 1 && sig.Results[0] == "[]int"
+}
+
+func goLLVMModelSupported(sig signatureInfo) bool {
+	if len(sig.Results) != 1 || !goLLVMReturnSupported(sig.Results[0]) {
+		return false
+	}
+	for _, param := range sig.Params {
+		if !goLLVMParamSupported(param.Type) {
+			return false
+		}
+	}
+	return true
+}
+
+func goLLVMParamSupported(typ string) bool {
+	switch typ {
+	case "bool", "string", "[]string":
+		return true
+	default:
+		return false
+	}
+}
+
+func goLLVMReturnSupported(typ string) bool {
+	switch typ {
+	case "string", "[]string":
+		return true
+	default:
+		return false
+	}
+}
+
+func goKLEEType(typ string) string {
+	switch typ {
+	case "int", "int64":
+		return "i64"
+	case "bool":
+		return "bool"
+	case "string":
+		return "string"
+	case "[]string":
+		return "slice_string"
+	default:
+		return typ
+	}
 }
 
 func sameSignature(oldSig signatureInfo, newSig signatureInfo) bool {

@@ -9,5 +9,56 @@
     "old_function": "foo1",
     "new_function": "foo2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "newRepo",
+      "type": "string"
+    },
+    {
+      "name": "authToken",
+      "type": "string"
+    },
+    {
+      "name": "jwt",
+      "type": "string"
+    },
+    {
+      "name": "body",
+      "type": "string"
+    }
+  ],
+  "results": [
+    {
+      "type": "string"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "newRepo",
+        "type": "string",
+        "length": 1
+      },
+      {
+        "name": "authToken",
+        "type": "string",
+        "length": 1
+      },
+      {
+        "name": "jwt",
+        "type": "string",
+        "length": 1
+      },
+      {
+        "name": "body",
+        "type": "string",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "string",
+      "compare": "logical"
+    }
+  }
 }
