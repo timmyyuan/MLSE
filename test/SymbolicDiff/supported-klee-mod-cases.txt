@@ -1,0 +1,15 @@
+# Motus symbolic-diff cases that must pass the full Go -> LLVM -> KLEE path in CI.
+# Keep this list to cases without expected_blocker whose KLEE result is already stable.
+motus-mod3-slice-append
+motus-mod4-foo1-foo2
+motus-mod5-foo1-foo2
+motus-mod6-foo1-foo2
+motus-mod7-foo1-foo2
+motus-mod9-foo1-foo2
+motus-mod10-foo1-foo2
+motus-mod11-normnil1-normnil2
+motus-mod16-foo1-foo2
+motus-mod17-foo1-foo2
+motus-mod21-foo1-foo2
+motus-mod25-rollback1-rollback2
+motus-mod39-foo-bar
