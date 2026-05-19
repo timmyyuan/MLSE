@@ -29,6 +29,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--cases-root", default=str(DEFAULT_CASES_ROOT))
     parser.add_argument("--case", action="append", default=[])
+    parser.add_argument(
+        "--require-case-list",
+        action="append",
+        default=[],
+        help="Text file containing case names that must finish without blockers and match expected_status.",
+    )
     parser.add_argument("--emit", default=str(DEFAULT_ARTIFACT_DIR))
     parser.add_argument("--mlse-go-bin", default="")
     parser.add_argument("--mlse-opt-bin", default="")
@@ -113,6 +119,43 @@ def collect_case_dirs(cases_root: Path, selected: list[str]) -> list[Path]:
     if selected:
         return [cases_root / name for name in selected]
     return sorted(path for path in cases_root.iterdir() if path.is_dir())
+
+
+def load_case_list(path: Path) -> list[str]:
+    names: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.split("#", 1)[0].strip()
+        if text:
+            names.append(text)
+    return names
+
+
+def collect_required_cases(case_list_paths: list[str]) -> list[str]:
+    required: list[str] = []
+    seen: set[str] = set()
+    for item in case_list_paths:
+        for name in load_case_list(resolve_path(item)):
+            if name not in seen:
+                required.append(name)
+                seen.add(name)
+    return required
+
+
+def required_case_failures(results: list[dict[str, Any]], required: list[str]) -> list[dict[str, str]]:
+    by_case = {item["case"]: item for item in results}
+    failures: list[dict[str, str]] = []
+    for name in required:
+        result = by_case.get(name)
+        if result is None:
+            failures.append({"case": name, "reason": "missing_from_probe"})
+            continue
+        blocker = result.get("first_blocker")
+        if blocker:
+            failures.append({"case": name, "reason": blocker})
+            continue
+        if result["status"] != result["expected_status"]:
+            failures.append({"case": name, "reason": f"status:{result['status']}"})
+    return failures
 
 
 def has_unresolved_go_dialect(text: str) -> bool:
@@ -1130,6 +1173,8 @@ def main() -> int:
     }
     cases = collect_case_dirs(resolve_path(args.cases_root), args.case)
     results = [probe_case(case_dir, emit_root, tools) for case_dir in cases]
+    required_cases = collect_required_cases(args.require_case_list)
+    required_failures = required_case_failures(results, required_cases)
     blockers = sorted(
         {
             item["first_blocker"]
@@ -1152,7 +1197,7 @@ def main() -> int:
     status = "ok"
     if blockers:
         status = "blocked"
-    elif failures:
+    elif failures or required_failures:
         status = "failure"
     summary = {
         "status": status,
@@ -1161,6 +1206,8 @@ def main() -> int:
         "first_blockers": blockers,
         "expected_blockers": expected_blockers,
         "failures": failures,
+        "required_cases": required_cases,
+        "required_case_failures": required_failures,
         "results": results,
     }
     write_json(emit_root / "summary.json", summary)

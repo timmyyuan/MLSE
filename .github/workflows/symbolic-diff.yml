@@ -112,4 +112,4 @@ jobs:
             -v "$PWD:/workspace" \
             -w /workspace \
             mlse-symbolic-diff:ci \
-            bash -c 'scripts/build.sh && scripts/build-mlir.sh && python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke && python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --expect-status ok'
+            bash -c 'scripts/build.sh && scripts/build-mlir.sh && python3 scripts/mlse-diff-smoke.py --run-klee-toolchain-smoke && python3 scripts/mlse-diff-go-pipeline-probe.py --run-klee --require-case-list test/SymbolicDiff/supported-klee-mod-cases.txt --expect-status ok'

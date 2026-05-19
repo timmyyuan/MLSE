@@ -7,10 +7,10 @@
 | 工作状态 | 空闲 |
 | 当前 agent | - |
 | 工作范围 | - |
-| 关联记录 | [2026-05-19-mlse-diff-simple-klee-models-0856.md](entries/2026-05-19-mlse-diff-simple-klee-models-0856.md) |
-| 开始时间 | 2026-05-19 08:56 CST |
+| 关联记录 | [2026-05-19-mlse-diff-ci-supported-mods-0920.md](entries/2026-05-19-mlse-diff-ci-supported-mods-0920.md) |
+| 开始时间 | 2026-05-19 09:20 CST |
 | 最后更新 | 2026-05-19 |
-| 交接备注 | 已补 simple KLEE model 与文档；本地验证通过，本机未安装 KLEE，真实 KLEE 探索交给 symbolic-diff CI 容器。 |
+| 交接备注 | 已补 supported Motus case CI 清单和 require-case-list 断言；本地验证通过，本机未安装 KLEE，真实 KLEE 由 CI Docker job 验证。 |
 
 ## 状态说明
 
