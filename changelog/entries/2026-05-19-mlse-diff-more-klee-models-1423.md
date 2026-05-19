@@ -2,10 +2,10 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | 验证中 |
+| 状态 | 已完成 |
 | 关联请求 | 先解决当前优先级较高的 KLEE unsupported Motus case |
 | 开始时间 | 2026-05-19 14:23 CST |
-| 结束时间 | 未完成 |
+| 结束时间 | 2026-05-19 14:52 CST |
 
 ## 背景
 
@@ -34,3 +34,10 @@
 - 2026-05-19 14:37：fake-KLEE 验证 `mod12`、`mod18`、`mod20`、`mod29`、`mod34` 可以构造 harness、`llvm-as`、`llvm-link` 并得到 fake equivalent；`mod30` 也完成 harness/链接，但 fake KLEE 不会生成 `assert.err`，因此真实 counterexample 留给 Docker CI 验证。
 - 2026-05-19 14:38：同步更新仓库 README / dev setup，以及 Obsidian `mlse设计/02-GoIR` 的构建和测试说明。
 - 2026-05-19 14:43：本地通过 `python3 -m py_compile scripts/mlse-diff-go-pipeline-probe.py scripts/mlse-diff-smoke.py scripts/mlse-diff-fuzz-smoke.py`、`go test ./cmd/... ./internal/...`、`staticcheck ./cmd/... ./internal/...`、`scripts/test-all.sh`、`scripts/lint.sh`。
+- 2026-05-19 14:52：PR #78 第一轮 GitHub CI 全部通过，包括 Docker KLEE symbolic-diff smoke；确认 `mod30` 真实 KLEE counterexample 路径可通过 CI。
+
+## 结果
+
+- `mod12`、`mod18`、`mod20`、`mod29`、`mod34` 已从 `klee_model_unavailable` 变成 CI 锁定的 `equivalent` case。
+- `mod30` 已从 `klee_model_unavailable` 变成 CI 锁定的 `counterexample` case。
+- 当前新增模型仍是 bounded repo-owned fixture model，不代表完整 set/map/DB/binding/runtime 语义。
