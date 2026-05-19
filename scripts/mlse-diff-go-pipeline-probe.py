@@ -241,6 +241,54 @@ not_equal:
   ret i1 false
 }
 
+define i1 @__mlse_error_equal(ptr %a, ptr %b) {
+entry:
+  %a_nil = icmp eq ptr %a, null
+  %b_nil = icmp eq ptr %b, null
+  %both_nil = and i1 %a_nil, %b_nil
+  %same_nil = icmp eq i1 %a_nil, %b_nil
+  br i1 %both_nil, label %equal, label %check_non_nil
+
+check_non_nil:
+  br i1 %same_nil, label %compare_message, label %not_equal
+
+compare_message:
+  %aval = load { ptr, i64 }, ptr %a, align 8
+  %bval = load { ptr, i64 }, ptr %b, align 8
+  %same = call i1 @__mlse_string_equal({ ptr, i64 } %aval, { ptr, i64 } %bval)
+  br i1 %same, label %equal, label %not_equal
+
+equal:
+  ret i1 true
+
+not_equal:
+  ret i1 false
+}
+
+define i1 @__mlse_ptr_i64_equal(ptr %a, ptr %b) {
+entry:
+  %a_nil = icmp eq ptr %a, null
+  %b_nil = icmp eq ptr %b, null
+  %both_nil = and i1 %a_nil, %b_nil
+  %same_nil = icmp eq i1 %a_nil, %b_nil
+  br i1 %both_nil, label %equal, label %check_non_nil
+
+check_non_nil:
+  br i1 %same_nil, label %compare_value, label %not_equal
+
+compare_value:
+  %aval = load i64, ptr %a, align 8
+  %bval = load i64, ptr %b, align 8
+  %same = icmp eq i64 %aval, %bval
+  br i1 %same, label %equal, label %not_equal
+
+equal:
+  ret i1 true
+
+not_equal:
+  ret i1 false
+}
+
 define { ptr, i64 } @runtime.add.string({ ptr, i64 } %a, { ptr, i64 } %b) {
 entry:
   %adata = extractvalue { ptr, i64 } %a, 0
@@ -380,6 +428,28 @@ unsupported:
   unreachable
 }
 
+define ptr @runtime.errors.New({ ptr, i64 } %message) {
+entry:
+  %err = call ptr @malloc(i64 16)
+  store { ptr, i64 } %message, ptr %err, align 8
+  ret ptr %err
+}
+
+define ptr @runtime.fmt.Errorf({ ptr, i64 } %format, { ptr, i64, i64 } %args) {
+entry:
+  %args_len = extractvalue { ptr, i64, i64 } %args, 1
+  %no_args = icmp eq i64 %args_len, 0
+  br i1 %no_args, label %constant_error, label %unsupported
+
+constant_error:
+  %err = call ptr @runtime.errors.New({ ptr, i64 } %format)
+  ret ptr %err
+
+unsupported:
+  call void @klee_report_error(ptr @.file, i32 4, ptr @.unsupported, ptr @.model_suffix)
+  unreachable
+}
+
 define { ptr, i64, i64 } @runtime.makeslice(i64 %len, i64 %cap) {
 entry:
   %bytes = mul i64 %cap, 8
@@ -474,9 +544,21 @@ def build_slice_i64_klee_harness(metadata: dict[str, Any], old_symbol: str, new_
     if length <= 0:
         raise ValueError("slice_i64 KLEE model requires a positive concrete input length")
     bytes_len = length * 8
+    input_mode = params[0].get("mode", "fixed")
+    if input_mode not in {"fixed", "nil_empty_full"}:
+        raise ValueError(f"unsupported slice_i64 input mode {input_mode!r}")
+    compare_mode = model.get("return", {}).get("compare", "logical")
+    if compare_mode not in {"logical", "strict"}:
+        raise ValueError(f"unsupported slice_i64 compare mode {compare_mode!r}")
+    compare_func = "__mlse_slice_i64_strict_equal" if compare_mode == "strict" else "__mlse_slice_i64_equal"
+    input_lines = slice_i64_input_lines(name, length, bytes_len, input_mode)
+    input_text = "\n".join(input_lines)
     symbolic_name = f"{name}_data"
     symbolic_name_len = len(symbolic_name) + 1
+    mode_name = f"{name}_mode"
+    mode_name_len = len(mode_name) + 1
     return f"""@.name_{name} = private unnamed_addr constant [{symbolic_name_len} x i8] c"{symbolic_name}\\00"
+@.name_{name}_mode = private unnamed_addr constant [{mode_name_len} x i8] c"{mode_name}\\00"
 @.file = private unnamed_addr constant [5 x i8] c"mlse\\00"
 @.mismatch = private unnamed_addr constant [9 x i8] c"mismatch\\00"
 @.panic = private unnamed_addr constant [6 x i8] c"panic\\00"
@@ -498,7 +580,9 @@ entry:
 define {{ ptr, i64, i64 }} @runtime.growslice(ptr %data, i64 %new_len, i64 %old_cap, i64 %count, i64 %elem_size) {{
 entry:
   %bytes = mul i64 %new_len, %elem_size
-  %buf = call ptr @malloc(i64 %bytes)
+  %empty = icmp eq i64 %bytes, 0
+  %alloc_len = select i1 %empty, i64 1, i64 %bytes
+  %buf = call ptr @malloc(i64 %alloc_len)
   %slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %buf, 0
   %slice1 = insertvalue {{ ptr, i64, i64 }} %slice0, i64 %new_len, 1
   %slice2 = insertvalue {{ ptr, i64, i64 }} %slice1, i64 %new_len, 2
@@ -508,7 +592,9 @@ entry:
 define {{ ptr, i64, i64 }} @runtime.makeslice(i64 %len, i64 %cap) {{
 entry:
   %bytes = mul i64 %cap, 8
-  %buf = call ptr @malloc(i64 %bytes)
+  %empty = icmp eq i64 %bytes, 0
+  %alloc_len = select i1 %empty, i64 1, i64 %bytes
+  %buf = call ptr @malloc(i64 %alloc_len)
   %slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %buf, 0
   %slice1 = insertvalue {{ ptr, i64, i64 }} %slice0, i64 %len, 1
   %slice2 = insertvalue {{ ptr, i64, i64 }} %slice1, i64 %cap, 2
@@ -548,17 +634,37 @@ not_equal:
   ret i1 false
 }}
 
+define i1 @__mlse_slice_i64_strict_equal({{ ptr, i64, i64 }} %a, {{ ptr, i64, i64 }} %b) {{
+entry:
+  %aptr = extractvalue {{ ptr, i64, i64 }} %a, 0
+  %bptr = extractvalue {{ ptr, i64, i64 }} %b, 0
+  %alen = extractvalue {{ ptr, i64, i64 }} %a, 1
+  %blen = extractvalue {{ ptr, i64, i64 }} %b, 1
+  %acap = extractvalue {{ ptr, i64, i64 }} %a, 2
+  %bcap = extractvalue {{ ptr, i64, i64 }} %b, 2
+  %anil = icmp eq ptr %aptr, null
+  %bnil = icmp eq ptr %bptr, null
+  %same_nil = icmp eq i1 %anil, %bnil
+  %same_len = icmp eq i64 %alen, %blen
+  %same_cap = icmp eq i64 %acap, %bcap
+  %same_shape0 = and i1 %same_nil, %same_len
+  %same_shape = and i1 %same_shape0, %same_cap
+  br i1 %same_shape, label %compare_values, label %not_equal
+
+compare_values:
+  %same_values = call i1 @__mlse_slice_i64_equal({{ ptr, i64, i64 }} %a, {{ ptr, i64, i64 }} %b)
+  ret i1 %same_values
+
+not_equal:
+  ret i1 false
+}}
+
 define i32 @main() {{
 entry:
-  %{name}_data = alloca [{length} x i64], align 8
-  %{name}_ptr = getelementptr [{length} x i64], ptr %{name}_data, i64 0, i64 0
-  call void @klee_make_symbolic(ptr %{name}_ptr, i64 {bytes_len}, ptr @.name_{name})
-  %{name}_slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %{name}_ptr, 0
-  %{name}_slice1 = insertvalue {{ ptr, i64, i64 }} %{name}_slice0, i64 {length}, 1
-  %{name}_slice2 = insertvalue {{ ptr, i64, i64 }} %{name}_slice1, i64 {length}, 2
+{input_text}
   %old_result = call {{ ptr, i64, i64 }} @{old_symbol}({{ ptr, i64, i64 }} %{name}_slice2)
   %new_result = call {{ ptr, i64, i64 }} @{new_symbol}({{ ptr, i64, i64 }} %{name}_slice2)
-  %same = call i1 @__mlse_slice_i64_equal({{ ptr, i64, i64 }} %old_result, {{ ptr, i64, i64 }} %new_result)
+  %same = call i1 @{compare_func}({{ ptr, i64, i64 }} %old_result, {{ ptr, i64, i64 }} %new_result)
   br i1 %same, label %ok, label %mismatch
 
 mismatch:
@@ -571,10 +677,40 @@ ok:
 	"""
 
 
+def slice_i64_input_lines(name: str, length: int, bytes_len: int, mode: str) -> list[str]:
+    common = [
+        f"  %{name}_data = alloca [{length} x i64], align 8",
+        f"  %{name}_ptr = getelementptr [{length} x i64], ptr %{name}_data, i64 0, i64 0",
+        f"  call void @klee_make_symbolic(ptr %{name}_ptr, i64 {bytes_len}, ptr @.name_{name})",
+    ]
+    if mode == "fixed":
+        return common + [
+            f"  %{name}_slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %{name}_ptr, 0",
+            f"  %{name}_slice1 = insertvalue {{ ptr, i64, i64 }} %{name}_slice0, i64 {length}, 1",
+            f"  %{name}_slice2 = insertvalue {{ ptr, i64, i64 }} %{name}_slice1, i64 {length}, 2",
+        ]
+    return common + [
+        f"  %{name}_mode_addr = alloca i8, align 1",
+        f"  call void @klee_make_symbolic(ptr %{name}_mode_addr, i64 1, ptr @.name_{name}_mode)",
+        f"  %{name}_mode_raw = load i8, ptr %{name}_mode_addr, align 1",
+        f"  %{name}_mode = and i8 %{name}_mode_raw, 3",
+        f"  %{name}_is_nil = icmp eq i8 %{name}_mode, 0",
+        f"  %{name}_is_zero_len = icmp ult i8 %{name}_mode, 2",
+        f"  %{name}_len = select i1 %{name}_is_zero_len, i64 0, i64 {length}",
+        f"  %{name}_cap = select i1 %{name}_is_nil, i64 0, i64 {length}",
+        f"  %{name}_data_or_null = select i1 %{name}_is_nil, ptr null, ptr %{name}_ptr",
+        f"  %{name}_slice0 = insertvalue {{ ptr, i64, i64 }} undef, ptr %{name}_data_or_null, 0",
+        f"  %{name}_slice1 = insertvalue {{ ptr, i64, i64 }} %{name}_slice0, i64 %{name}_len, 1",
+        f"  %{name}_slice2 = insertvalue {{ ptr, i64, i64 }} %{name}_slice1, i64 %{name}_cap, 2",
+    ]
+
+
 def go_abi_llvm_type(model_type: str) -> str:
     mapping = {
         "bool": "i1",
+        "error": "ptr",
         "i64": "i64",
+        "ptr_i64": "ptr",
         "string": "{ ptr, i64 }",
         "slice_string": "{ ptr, i64, i64 }",
     }
@@ -686,6 +822,14 @@ def go_abi_compare_lines(return_type: str) -> list[str]:
     if return_type == "slice_string":
         return [
             "  %same = call i1 @__mlse_slice_string_equal({ ptr, i64, i64 } %old_result, { ptr, i64, i64 } %new_result)"
+        ]
+    if return_type == "error":
+        return [
+            "  %same = call i1 @__mlse_error_equal(ptr %old_result, ptr %new_result)"
+        ]
+    if return_type == "ptr_i64":
+        return [
+            "  %same = call i1 @__mlse_ptr_i64_equal(ptr %old_result, ptr %new_result)"
         ]
     raise ValueError(f"unsupported go_llvm KLEE return type {return_type!r}")
 
