@@ -9,5 +9,21 @@
     "old_function": "foo1",
     "new_function": "foo2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "userEnv",
+        "type": "map_string_string"
+      },
+      {
+        "name": "expriementArgs",
+        "type": "string",
+        "length": 2
+      }
+    ],
+    "return": {
+      "type": "void"
+    }
+  }
 }

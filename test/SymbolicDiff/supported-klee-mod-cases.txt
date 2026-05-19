@@ -14,6 +14,7 @@ motus-mod14-foo1-foo2
 motus-mod16-foo1-foo2
 motus-mod17-foo1-foo2
 motus-mod18-foo1-foo2
+motus-mod19-foo1-foo2
 motus-mod20-foo1-foo2
 motus-mod21-foo1-foo2
 motus-mod25-rollback1-rollback2
