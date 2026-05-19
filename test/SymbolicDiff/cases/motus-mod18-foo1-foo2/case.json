@@ -9,5 +9,34 @@
     "old_function": "foo1",
     "new_function": "foo2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "a",
+      "type": "string"
+    },
+    {
+      "name": "b",
+      "type": "string"
+    }
+  ],
+  "results": [],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "a",
+        "type": "string",
+        "length": 1
+      },
+      {
+        "name": "b",
+        "type": "string",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "void",
+      "compare": "no-return"
+    }
+  }
 }
