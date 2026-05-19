@@ -200,6 +200,84 @@ func New(x int) int {
 	}
 }
 
+func TestPrepareCaseAddsStringKLEEModel(t *testing.T) {
+	repo := newGitRepo(t)
+	writeRepoFile(t, repo, "fmt.go", `package sample
+
+func F(name string) string {
+	return "hello " + name
+}
+`)
+	oldCommit := commitAll(t, repo, "old")
+	writeRepoFile(t, repo, "fmt.go", `package sample
+
+func F(name string) string {
+	return "hello, " + name
+}
+`)
+	newCommit := commitAll(t, repo, "new")
+
+	result, metadata := prepareCaseForTest(t, repo, oldCommit, newCommit, PrepareOptions{
+		CaseName:       "string-model",
+		ExpectedStatus: "counterexample",
+	})
+
+	if result.Model != "klee_model:go_llvm" {
+		t.Fatalf("model = %q, want go_llvm KLEE model", result.Model)
+	}
+	if metadata.KLEEModel == nil || metadata.KLEEModel.ABI != "go_llvm" {
+		t.Fatalf("metadata did not keep go_llvm model: %+v", metadata)
+	}
+	if got := metadata.KLEEModel.Params[0].Type; got != "string" {
+		t.Fatalf("param model type = %q, want string", got)
+	}
+	if got := metadata.KLEEModel.Return.Type; got != "string" {
+		t.Fatalf("return model type = %q, want string", got)
+	}
+}
+
+func TestPrepareCaseAddsSliceStringKLEEModel(t *testing.T) {
+	repo := newGitRepo(t)
+	writeRepoFile(t, repo, "norm.go", `package sample
+
+func F(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+`)
+	oldCommit := commitAll(t, repo, "old")
+	writeRepoFile(t, repo, "norm.go", `package sample
+
+func F(values []string) []string {
+	if values == nil || len(values) == 0 {
+		return nil
+	}
+	return values
+}
+`)
+	newCommit := commitAll(t, repo, "new")
+
+	result, metadata := prepareCaseForTest(t, repo, oldCommit, newCommit, PrepareOptions{
+		CaseName:    "slice-string-model",
+		SliceLength: 2,
+	})
+
+	if result.Model != "klee_model:go_llvm" {
+		t.Fatalf("model = %q, want go_llvm KLEE model", result.Model)
+	}
+	if metadata.KLEEModel == nil || metadata.KLEEModel.Params[0].Type != "slice_string" {
+		t.Fatalf("metadata did not keep slice_string model: %+v", metadata)
+	}
+	if got := metadata.KLEEModel.Params[0].Length; got != 2 {
+		t.Fatalf("slice length = %d, want 2", got)
+	}
+	if got := metadata.KLEEModel.Return.Type; got != "slice_string" {
+		t.Fatalf("return model type = %q, want slice_string", got)
+	}
+}
+
 func TestPrepareCaseRejectsVariadicEntry(t *testing.T) {
 	repo := newGitRepo(t)
 	writeRepoFile(t, repo, "calc.go", "package sample\n\nfunc F(x int, rest ...int) int { return x }\n")

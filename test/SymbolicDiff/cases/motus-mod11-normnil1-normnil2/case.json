@@ -9,5 +9,29 @@
     "old_function": "NormNil1",
     "new_function": "NormNil2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "r",
+      "type": "[]string"
+    }
+  ],
+  "results": [
+    {
+      "type": "[]string"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "r",
+        "type": "slice_string",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "slice_string",
+      "compare": "logical"
+    }
+  }
 }
