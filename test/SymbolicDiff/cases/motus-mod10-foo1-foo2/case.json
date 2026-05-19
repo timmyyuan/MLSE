@@ -9,5 +9,30 @@
     "old_function": "foo1",
     "new_function": "foo2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "pl",
+      "type": "[]int"
+    }
+  ],
+  "results": [
+    {
+      "type": "[]int"
+    }
+  ],
+  "klee_model": {
+    "abi": "slice_i64",
+    "params": [
+      {
+        "name": "pl",
+        "type": "slice_i64",
+        "length": 1,
+        "mode": "nil_empty_full"
+      }
+    ],
+    "return": {
+      "type": "slice_i64",
+      "compare": "strict"
+    }
+  }
 }

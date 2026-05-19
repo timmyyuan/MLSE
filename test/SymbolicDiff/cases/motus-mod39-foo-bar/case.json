@@ -9,5 +9,29 @@
     "old_function": "Foo",
     "new_function": "Bar"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "flag",
+      "type": "bool"
+    }
+  ],
+  "results": [
+    {
+      "type": "*Resp"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "flag",
+        "type": "bool",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "ptr_i64",
+      "compare": "field0"
+    }
+  }
 }

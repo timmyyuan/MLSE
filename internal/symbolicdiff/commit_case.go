@@ -605,14 +605,22 @@ func goLLVMModelSupported(sig signatureInfo) bool {
 		return false
 	}
 	for _, param := range sig.Params {
-		if !goLLVMParamSupported(param.Type) {
+		if !goLLVMParamSupported(param.Type, sig.Results[0]) {
 			return false
 		}
 	}
 	return true
 }
 
-func goLLVMParamSupported(typ string) bool {
+func goLLVMParamSupported(typ string, result string) bool {
+	if result == "error" {
+		switch typ {
+		case "int", "int64", "bool", "string":
+			return true
+		default:
+			return false
+		}
+	}
 	switch typ {
 	case "bool", "string", "[]string":
 		return true
@@ -623,7 +631,7 @@ func goLLVMParamSupported(typ string) bool {
 
 func goLLVMReturnSupported(typ string) bool {
 	switch typ {
-	case "string", "[]string":
+	case "string", "[]string", "error":
 		return true
 	default:
 		return false
@@ -640,6 +648,8 @@ func goKLEEType(typ string) string {
 		return "string"
 	case "[]string":
 		return "slice_string"
+	case "error":
+		return "error"
 	default:
 		return typ
 	}

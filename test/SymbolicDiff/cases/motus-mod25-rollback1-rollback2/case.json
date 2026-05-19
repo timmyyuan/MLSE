@@ -9,5 +9,38 @@
     "old_function": "Rollback1",
     "new_function": "Rollback2"
   },
-  "expected_blocker": "klee_model_unavailable"
+  "inputs": [
+    {
+      "name": "strategyId",
+      "type": "int"
+    },
+    {
+      "name": "rollbackEnableValue",
+      "type": "bool"
+    }
+  ],
+  "results": [
+    {
+      "type": "error"
+    }
+  ],
+  "klee_model": {
+    "abi": "go_llvm",
+    "params": [
+      {
+        "name": "strategyId",
+        "type": "i64",
+        "length": 1
+      },
+      {
+        "name": "rollbackEnableValue",
+        "type": "bool",
+        "length": 1
+      }
+    ],
+    "return": {
+      "type": "error",
+      "compare": "logical"
+    }
+  }
 }

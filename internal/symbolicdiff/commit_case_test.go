@@ -278,6 +278,51 @@ func F(values []string) []string {
 	}
 }
 
+func TestPrepareCaseAddsErrorKLEEModel(t *testing.T) {
+	repo := newGitRepo(t)
+	writeRepoFile(t, repo, "rollback.go", `package sample
+
+import "errors"
+
+func F(strategyId int, enabled bool) error {
+	if strategyId == 0 {
+		return errors.New("zero!")
+	}
+	return nil
+}
+`)
+	oldCommit := commitAll(t, repo, "old")
+	writeRepoFile(t, repo, "rollback.go", `package sample
+
+import "errors"
+
+func F(strategyId int, enabled bool) error {
+	if strategyId == 0 {
+		return errors.New("zero")
+	}
+	return nil
+}
+`)
+	newCommit := commitAll(t, repo, "new")
+
+	result, metadata := prepareCaseForTest(t, repo, oldCommit, newCommit, PrepareOptions{
+		CaseName: "error-model",
+	})
+
+	if result.Model != "klee_model:go_llvm" {
+		t.Fatalf("model = %q, want go_llvm KLEE model", result.Model)
+	}
+	if metadata.KLEEModel == nil || metadata.KLEEModel.Return.Type != "error" {
+		t.Fatalf("metadata did not keep error model: %+v", metadata)
+	}
+	if got := metadata.KLEEModel.Params[0].Type; got != "i64" {
+		t.Fatalf("first param model type = %q, want i64", got)
+	}
+	if got := metadata.KLEEModel.Params[1].Type; got != "bool" {
+		t.Fatalf("second param model type = %q, want bool", got)
+	}
+}
+
 func TestPrepareCaseRejectsVariadicEntry(t *testing.T) {
 	repo := newGitRepo(t)
 	writeRepoFile(t, repo, "calc.go", "package sample\n\nfunc F(x int, rest ...int) int { return x }\n")
